@@ -33,7 +33,25 @@ class XKeyEvent(ctypes.Structure):
     ]
 
 
+class XEventBuf(ctypes.Structure):
+    """union XEvent 占位（本机 sizeof(XEvent)=192 > XKeyEvent=96）。
+
+    XNextEvent 按整个 union 拷贝 192 字节；若只给它 XKeyEvent（96B）
+    的缓冲，会越界写坏相邻堆块（表现为退出 GC 时 free(): invalid size 崩溃）。
+    字段从缓冲起始处读即可（XKeyEvent 是 union 的第一个成员）。
+    """
+
+    _fields_ = [
+        ("xkey", XKeyEvent),
+        ("_pad", ctypes.c_ubyte * (192 - ctypes.sizeof(XKeyEvent))),
+    ]
+
+
 _LIBX = ctypes.CDLL(ctypes.util.find_library("X11"))
+# 轮询线程与主线程并发访问同一个 Display，必须先启用 Xlib 内部线程安全，
+# 否则 Xlib 内部状态被并发读写、堆损坏（表现为退出 GC 时 free(): invalid size 崩溃）
+_LIBX.XInitThreads.restype = ctypes.c_int
+_LIBX.XInitThreads()
 _ERRH = ctypes.CFUNCTYPE(ctypes.c_int, ctypes.c_void_p, ctypes.c_void_p)
 
 
@@ -57,7 +75,7 @@ _LIBX.XGrabKey.argtypes = [ctypes.c_void_p, ctypes.c_uint, ctypes.c_uint, ctypes
                            ctypes.c_int, ctypes.c_int, ctypes.c_int]
 _LIBX.XUngrabKey.argtypes = [ctypes.c_void_p, ctypes.c_uint, ctypes.c_uint, ctypes.c_ulong]
 _LIBX.XPending.argtypes = [ctypes.c_void_p]
-_LIBX.XNextEvent.argtypes = [ctypes.c_void_p, ctypes.POINTER(XKeyEvent)]
+_LIBX.XNextEvent.argtypes = [ctypes.c_void_p, ctypes.POINTER(XEventBuf)]
 _LIBX.XFlush.argtypes = [ctypes.c_void_p]
 _LIBX.XFlush.restype = ctypes.c_int
 _LIBX.XSync.argtypes = [ctypes.c_void_p, ctypes.c_int]
@@ -129,12 +147,13 @@ class GlobalHotkey:
     def _loop(self):
         while self._run and self._d:
             if _LIBX.XPending(self._d):
-                ev = XKeyEvent()
+                ev = XEventBuf()
                 _LIBX.XNextEvent(self._d, ctypes.byref(ev))
-                if ev.type == self.KeyPress and ev.keycode == self._keycode:
+                if ev.xkey.type == self.KeyPress and ev.xkey.keycode == self._keycode:
                     # 只认"指定 mods"，忽略 NumLock/CapsLock 状态
-                    if (ev.state & ~(self.LOCK | self.MOD2)) == self._mods:
+                    if (ev.xkey.state & ~(self.LOCK | self.MOD2)) == self._mods:
                         self._on_press()
+                del ev  # 避免帧残留事件缓冲，杜绝收尾 GC 时其 dealloc 崩溃
             else:
                 time.sleep(0.02)
 
