@@ -42,8 +42,7 @@ _lock_fd = None
 
 # 固定 UUID 唯一单例标识（随机生成一次后不再变）：
 # 所有实例共用同一 token `<uuid>_SnapText`，配合 flock + PID 存活校验防多开。
-SNAP_LOCK_UUID = "61714529-f194-4e05-9b24-8f16b52d699f"
-SNAP_LOCK_TOKEN = f"{SNAP_LOCK_UUID}_SnapText"
+SNAP_LOCK_TOKEN = "61714529-f194-4e05-9b24-8f16b52d699f_SnapText"
 
 
 def _pid_alive(pid: int) -> bool:
