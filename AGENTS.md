@@ -40,8 +40,8 @@ requirements.txt，无测试/构建配置。
 - **`snaptext.py`**：入口，接线三个模块。Alt+X（keysym `x` + Mod1Mask=8）＝截图+
   存图+复制图片；Alt+C（`c`）＝截图+存图+OCR+复制文字。热键回调跑在 X 轮询线程，
   经 `hotkey_pressed` 信号 queued 到 GUI 线程。`OcrWorker` 复用已保存的 png 喂
-  `OcrEngine`，QThread 后台跑。主窗口 `Qt.Tool | WindowStaysOnTopHint`，关闭时
-  release 热键。
+  `OcrEngine`，QThread 后台跑。**托盘模式，MainWin 不 show**；单实例锁
+  （`fcntl.flock`，多开会抢同一 XGrabKey 致热键失效）。
 
 ## Xlib 热键踩过的坑（hotkey.py 已修，改它时勿回退）
 
@@ -54,12 +54,27 @@ requirements.txt，无测试/构建配置。
 - `release()` 必须 join 轮询线程、持有 error handler 回调引用，否则解释器收尾 GC
   崩溃。
 
+## PySide6 / 高分屏踩过的坑（已修，别回退）
+
+- **4K 屏 dpr=2**：`grabWindow(0)` 返回设备像素图（3840×2160），窗口/鼠标坐标是
+  逻辑（1920×1080）。Select 画布 source rect 和 `_on_selected` 拷图 rect 都必须乘
+  dpr，否则选区显示巨大/位置错位、存图错裁。
+- **QThread worker 要存 self 保持强引用**：PySide6 对"纯 Python 方法槽"不持强引用，
+  `OcrWorker` 只作局部变量会在作用域结束后被 GC，`started→run` 永不触发、txt 不落盘。
+- **线程 finished 后 `deleteLater` 会删 C++ 对象**，再访问 `_ocr_thread.isRunning()`
+  崩 `RuntimeError`；finished 时把 `_ocr_thread` 置 None。
+- **弹窗期间保持 `_busy`**：否则弹窗开着时再按热键会叠全屏选区遮罩，看起来程序
+  "未响应/关不掉"。`ResultDlg` 关闭统一走 `reject()` 保证 `exec()` 返回。
+- **单实例锁**：多开实例抢同一 XGrabKey，热键随机失效。`acquire_single_instance()`。
+
 ## 运行与验证
 
-- 运行：`python3 snaptext.py`（需 X11 `DISPLAY`，本机 `:0`）。
+- 运行：`python3 snaptext.py`（需 X11 `DISPLAY`，本机 `:0`）。**单实例**：再开会被
+  拦截退出。
 - 验证：`python3 -m py_compile *.py`；`QT_QPA_PLATFORM=offscreen` 可无界面 import；
   用 `xdotool key alt+x` 注入真实热键测试（注意会弹选区遮罩）；
   严格内存检查用 `PYTHONMALLOC=malloc`（pymalloc 会掩盖堆损坏）。
+  清理测试残留实例：`pkill -f '[s]naptext.py'`（带方括号防误杀自身命令）。
 - **全部依赖装系统 Python 3.14.6 用户 site-packages（`~/.local/...`），不用 venv**
   （符合 `/home/aheng/AGENTS.md` 的机器策略）。已装：PySide6 6.11.1、
   rapidocr-onnxruntime 1.2.3、onnxruntime 1.28.0、opencv-python 5.0.0.93、numpy 2.4.1。
