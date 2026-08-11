@@ -6,18 +6,33 @@
 """
 
 import sys
+from pathlib import Path
 
 import cv2
 from rapidocr_onnxruntime import RapidOCR
 
 _engine = None
 
+# 模型随项目打包（models/，仓库内），真正离线、不依赖 wheel 内置模型
+_MODELS = {
+    "det": Path(__file__).resolve().parent / "models" / "ch_PP-OCRv3_det_infer.onnx",
+    "rec": Path(__file__).resolve().parent / "models" / "ch_PP-OCRv3_rec_infer.onnx",
+    "cls": Path(__file__).resolve().parent / "models" / "ch_ppocr_mobile_v2.0_cls_infer.onnx",
+}
+
 
 def _get_engine() -> RapidOCR:
     """惰性获取全局唯一 RapidOCR 实例（首次调用才加载模型）。"""
     global _engine
     if _engine is None:
-        _engine = RapidOCR()
+        if all(p.exists() for p in _MODELS.values()):
+            _engine = RapidOCR(
+                det_model_path=str(_MODELS["det"]),
+                rec_model_path=str(_MODELS["rec"]),
+                cls_model_path=str(_MODELS["cls"]),
+            )
+        else:
+            _engine = RapidOCR()  # 项目内模型缺失时回退 wheel 内置模型
     return _engine
 
 

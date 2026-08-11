@@ -23,8 +23,9 @@ pip3 install --user --break-system-packages \
   PySide6 rapidocr-onnxruntime onnxruntime opencv-python numpy
 ```
 
-> OCR 模型（ch_PP-OCRv3 det/rec、ch_ppocr_mobile cls）已打包在
-> `rapidocr-onnxruntime` wheel 内，首次调用本地加载，无下载、无镜像问题。
+> **模型已直接打包进本项目**（`models/` 目录随仓库提交，共 14MB）：ch_PP-OCRv3
+> det/rec、ch_ppocr_mobile cls。装好依赖即可离线使用，无需下载模型、无镜像问题。
+> `ocr.py` 优先加载项目内模型，缺失时才回退 `rapidocr-onnxruntime` wheel 内置模型。
 
 ## 运行与使用
 
@@ -46,10 +47,12 @@ python3 snaptext.py
 ```
 snaptext.py   入口：接线四模块，热键→选区→存盘→复制/OCR 流程编排
   ├── ocr.py      图片→文本（纯 onnx，Qt-free）。OcrEngine 惰性单例复用
-  │               RapidOCR；CLI 可单跑：python3 ocr.py <图片>
+  │               RapidOCR；模型用项目内 models/（缺失回退 wheel）；
+  │               CLI 可单跑：python3 ocr.py <图片>
   ├── ui.py       选区 Selector（全屏 override-redirect 遮罩）+ grab_screen
   ├── hotkey.py   全局热键 GlobalHotkey（ctypes 直调 libX11 XGrabKey，Qt-free）
   └── tray.py     托盘图标 TrayIcon（程序化图标，无外部资源）
+  └── models/     三个 onnx 模型文件（随仓库打包，真正离线）
 ```
 
 关键接口：

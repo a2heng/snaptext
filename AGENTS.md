@@ -13,11 +13,13 @@
 - 装新依赖走 `pip3 install --user --break-system-packages`，默认走 NJU PyPI 镜像
   （`/etc/pip.conf`）。
 
-## 模型（本地 onnx，无下载）
+## 模型（本地 onnx，随仓库打包）
 
-- OCR 用 `rapidocr_onnxruntime`。**模型直接打包在 wheel 里**（包内
-  `models/`：ch_PP-OCRv3_det/rec_infer.onnx、ch_ppocr_mobile_v2.0_cls_infer.onnx），
-  首次调用即本地加载，**不联网下载、无镜像问题**。不要把模型丢进项目目录或重下。
+- **模型已直接打进项目 `models/` 目录**（随 git 提交，共 14MB：ch_PP-OCRv3
+  det/rec、ch_ppocr_mobile_v2.0_cls），真正离线、不依赖 wheel 内置模型。
+- `ocr.py` 的 `_MODELS` 指向项目内模型，经 `RapidOCR(det_model_path=...,
+  rec_model_path=..., cls_model_path=...)` 加载；项目内缺失时才回退 wheel
+  内置模型。**更新模型时直接替换 `models/` 下文件即可**。
 - `OcrEngine` 惰性建全局唯一 `RapidOCR` 单例复用（首帧冷启动约 0.7s）。
 
 ## 模块架构
