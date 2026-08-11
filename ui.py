@@ -1,22 +1,18 @@
-"""拾字 SnapText —— 独立 UI 模块（全屏选区 + 结果窗）。
+"""拾字 SnapText —— 独立 UI 模块（全屏选区）。
 
-只含 Qt/UI 逻辑：不掺热键、不掺 OCR。其它模块通过
-grab_screen / Selector / ResultDlg 调用。
+只含 Qt/UI 逻辑：不掺热键、不掺 OCR。其它模块通过 grab_screen / Selector 调用。
 """
 from PySide6.QtCore import QPoint, QPointF, QRect, QRectF, Qt, Signal
 from PySide6.QtGui import QColor, QGuiApplication, QPainter, QPen, QPixmap
-from PySide6.QtWidgets import (
-    QDialog,
-    QHBoxLayout,
-    QPushButton,
-    QTextEdit,
-    QVBoxLayout,
-    QWidget,
-)
+from PySide6.QtWidgets import QWidget
 
 
 def grab_screen() -> QPixmap:
-    """抓取当前主屏。"""
+    """抓取主屏全屏（含系统面板）。
+
+    配合 Selector 的 X11BypassWindowManagerHint 全屏 overlay，两者 1:1：
+    所见即所得，也能选中/截到面板区域。
+    """
     return QGuiApplication.primaryScreen().grabWindow(0)
 
 
@@ -27,8 +23,14 @@ class Selector(QWidget):
     cancelled = Signal()      # Esc 取消时 emit
 
     def __init__(self, pix: QPixmap):
+        # X11BypassWindowManagerHint：绕过 WM 直接叠在根窗口上，
+        # 才能盖住 KDE 系统面板（普通置顶窗会被面板压住）；代价是
+        # 收不到键盘事件，Esc 需由入口侧用全局热键兜底。
         super().__init__(
-            None, Qt.Tool | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint
+            None,
+            Qt.FramelessWindowHint
+            | Qt.WindowStaysOnTopHint
+            | Qt.X11BypassWindowManagerHint,
         )
         self._pix = pix
         self._start = QPoint()
@@ -105,35 +107,3 @@ class Selector(QWidget):
         if ev.key() == Qt.Key_Escape:
             self.cancelled.emit()
             self.close()
-
-
-class ResultDlg(QDialog):
-    """结果/提示弹窗：只读文本 + 「复制」「关闭」。"""
-
-    def __init__(self, text, title="识别结果", parent=None):
-        super().__init__(parent, Qt.Tool | Qt.WindowStaysOnTopHint)
-        self._text = text
-        self.setWindowTitle(title)
-        lay = QVBoxLayout(self)
-        edit = QTextEdit()
-        edit.setReadOnly(True)
-        edit.setPlainText(text)
-        lay.addWidget(edit)
-        btns = QHBoxLayout()
-        copy_btn = QPushButton("复制")
-        copy_btn.clicked.connect(self._copy)
-        close_btn = QPushButton("关闭")
-        close_btn.clicked.connect(self.reject)
-        btns.addWidget(copy_btn)
-        btns.addWidget(close_btn)
-        lay.addLayout(btns)
-        self.resize(420, 300)
-
-    def closeEvent(self, e):
-        # 任何关闭路径（按钮/WM 关闭）都以 reject 结束 exec()，避免主线程
-        # 卡在嵌套事件循环里被 WM 判定"未响应"
-        self.reject()
-        e.accept()
-
-    def _copy(self):
-        QGuiApplication.clipboard().setText(self._text)

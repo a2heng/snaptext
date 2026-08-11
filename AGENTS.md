@@ -31,17 +31,19 @@ requirements.txt，无测试/构建配置。
   `recognize_path(path)->str` / `recognize(img: BGR ndarray)->str`，失败抛
   `RuntimeError`。可命令行单跑：`python3 ocr.py <图片>`（stdout 吐文本，失败
   stderr+非零码）。
-- **`ui.py`**：只含 Qt/UI。`grab_screen()`、`Selector`（全屏拉框 overlay，
-  `selected(QRect)`/`cancelled()` 信号，5×5 最小选区，Esc 取消，小选区也 emit
-  cancelled）、`ResultDlg`（只读文本 + 复制/关闭）。
+- **`ui.py`**：只含 Qt/UI。`grab_screen()`（抓**可用区域**=屏幕减系统面板，避免
+  选区与 KDE 底栏错位/双底栏）、`Selector`（全屏拉框 overlay，几何与抓图同取
+  `availableGeometry()`，`selected(QRect)`/`cancelled()` 信号，5×5 最小选区，Esc
+  取消，小选区也 emit cancelled）。**无结果弹窗**（不再有 ResultDlg）。
 - **`hotkey.py`**：`GlobalHotkey(key, mods, on_press)`，ctypes 直调 libX11
   `XGrabKey`，**X11 专属，Wayland 下不工作**。`on_press` 在轮询线程回调，入口需
   用跨线程信号 marshal 到 GUI 线程。**不依赖 Qt**。可重复调用 `release()`。
-- **`snaptext.py`**：入口，接线三个模块。Alt+X（keysym `x` + Mod1Mask=8）＝截图+
-  存图+复制图片；Alt+C（`c`）＝截图+存图+OCR+复制文字。热键回调跑在 X 轮询线程，
-  经 `hotkey_pressed` 信号 queued 到 GUI 线程。`OcrWorker` 复用已保存的 png 喂
-  `OcrEngine`，QThread 后台跑。**托盘模式，MainWin 不 show**；单实例锁
-  （`fcntl.flock`，多开会抢同一 XGrabKey 致热键失效）。
+- **`snaptext.py`**：入口，接线三个模块。**两个快捷键都=截图+存图**：Alt+X
+  （keysym `x` + Mod1Mask=8）＝截图+存图+复制图片；Alt+C（`c`）＝截图+存图+OCR+
+  复制文字。**全程无确认弹窗**，结果走托盘非阻塞气泡（`tray.notify`）。热键回调
+  跑在 X 轮询线程，经 `hotkey_pressed` 信号 queued 到 GUI 线程。`OcrWorker` 复用
+  已保存的 png 喂 `OcrEngine`，QThread 后台跑。**托盘模式，MainWin 不 show**；
+  单实例锁（`fcntl.flock`，多开会抢同一 XGrabKey 致热键失效）。
 
 ## Xlib 热键踩过的坑（hotkey.py 已修，改它时勿回退）
 

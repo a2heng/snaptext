@@ -49,5 +49,9 @@ class TrayIcon(QSystemTrayIcon):
                 3000,
             )
 
+    def notify(self, title, msg, timeout=2000):
+        """非阻塞气泡提示（结果反馈，代替确认弹窗）。"""
+        self.showMessage(title, msg, QSystemTrayIcon.Information, timeout)
+
     def _quit(self):
         QApplication.instance().quit()
