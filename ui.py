@@ -3,7 +3,7 @@
 只含 Qt/UI 逻辑：不掺热键、不掺 OCR。其它模块通过
 grab_screen / Selector / ResultDlg 调用。
 """
-from PySide6.QtCore import QPoint, QRect, Qt, Signal
+from PySide6.QtCore import QPoint, QPointF, QRect, QRectF, Qt, Signal
 from PySide6.QtGui import QColor, QGuiApplication, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
     QDialog,
@@ -47,14 +47,25 @@ class Selector(QWidget):
 
     def paintEvent(self, event):
         p = QPainter(self)
+        # 高分屏：pix 是设备像素（如 3840x2160, dpr=2），窗口/鼠标坐标是逻辑
+        # （1920x1080）。drawPixmap 的 source 矩形按"图片像素"计，必须乘 dpr。
+        dpr = self._pix.devicePixelRatio()
         # 底图铺满整个屏幕
-        p.drawPixmap(self.rect(), self._pix, QRect(QPoint(0, 0), self._pix.size()))
+        p.drawPixmap(
+            QRectF(self.rect()),
+            self._pix,
+            QRectF(0, 0, self._pix.width(), self._pix.height()),
+        )
         # 半透明黑遮罩
         p.fillRect(self.rect(), QColor(0, 0, 0, 100))
         r = self.sel_rect()
         if self._selecting and not r.isNull():
-            # 选区原位还原
-            p.drawPixmap(r, self._pix, r)
+            # 选区原位还原：source 用设备像素（r * dpr），target 用逻辑 r
+            p.drawPixmap(
+                QRectF(r),
+                self._pix,
+                QRectF(r.x() * dpr, r.y() * dpr, r.width() * dpr, r.height() * dpr),
+            )
             # 蓝框
             p.setPen(QPen(QColor(0, 120, 215), 2))
             p.drawRect(r)

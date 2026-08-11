@@ -18,12 +18,13 @@ import os
 import sys
 import time
 
-from PySide6.QtCore import QObject, QThread, Qt, Signal
+from PySide6.QtCore import QObject, QRect, QThread, Qt, Signal
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import QApplication, QHBoxLayout, QLabel, QWidget
 
 from hotkey import GlobalHotkey
 from ocr import OcrEngine
+from tray import TrayIcon
 from ui import ResultDlg, Selector, grab_screen
 
 APP_NAME = "拾字 SnapText"
@@ -64,7 +65,7 @@ class OcrWorker(QObject):
 
 
 class MainWin(QWidget):
-    """小窗入口：注册热键，负责"选图 → 存盘 → 复制/OCR"流程编排。"""
+    """隐藏的编排窗口：注册热键，负责"选图 → 存盘 → 复制/OCR"流程。不 show。"""
 
     hotkey_pressed = Signal(str)
 
@@ -111,7 +112,17 @@ class MainWin(QWidget):
         self.show()
 
     def _on_selected(self, r):
-        pix = self._sel._pix.copy(r)
+        src = self._sel._pix
+        # 高分屏：选区 r 是逻辑坐标，pix 是设备像素（dpr=2），拷图前乘 dpr
+        dpr = src.devicePixelRatio()
+        pix = src.copy(
+            QRect(
+                int(r.x() * dpr),
+                int(r.y() * dpr),
+                int(r.width() * dpr),
+                int(r.height() * dpr),
+            )
+        )
         self._sel = None
         ts = time.strftime("%Y%m%d_%H%M%S") + f"_{int(time.time() * 1000) % 1000:03d}"
         img_path = os.path.join(IMG_DIR, ts + ".png")
@@ -136,7 +147,11 @@ class MainWin(QWidget):
         wk.done.connect(th.quit)
         wk.done.connect(wk.deleteLater)
         th.finished.connect(th.deleteLater)
+        # 必须存 self 保持强引用：PySide6 对"纯 Python 方法槽"不持强引用，
+        # 局部变量作用域结束后 wk 会被 GC，run 永远不会被调用
+        self._ocr_worker = wk
         self._ocr_thread = th
+        th.finished.connect(lambda: setattr(self, "_ocr_worker", None))
         th.start()
 
     def _on_ocr_done(self, text):
@@ -147,16 +162,23 @@ class MainWin(QWidget):
             self._finish(text, "识别失败")
 
     def closeEvent(self, e):
+        self.cleanup()
+        super().closeEvent(e)
+
+    def cleanup(self):
+        """释放热键（QApplication 退出时可能不触发 closeEvent，需显式调）。"""
         for hk in self._hotkeys:
             hk.release()
-        super().closeEvent(e)
+        self._hotkeys.clear()
 
 
 def main():
     app = QApplication(sys.argv)
     app.setApplicationName(APP_NAME)
     w = MainWin()
-    w.show()
+    tray = TrayIcon(w)
+    app.aboutToQuit.connect(w.cleanup)
+    tray.show()
     sys.exit(app.exec())
 
 
