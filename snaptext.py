@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""拾字 SnapText —— 极简屏幕 OCR（入口：接线 ocr/hotkey/ui 独立模块）
+"""拾字 SnapText —— 极简屏幕 OCR（入口：接线 ocr/hotkey/ui/tray 独立模块）
 
 全局快捷键（X11）：
   Alt+X  截图 → 保存选区图片 → 复制图片到剪贴板
@@ -9,6 +9,7 @@
   ocr.py     图片 → 文本（纯 onnx，Qt-free，可命令行单跑）
   hotkey.py  全局热键 XGrabKey（X11，Qt-free）
   ui.py      选区 Selector + 结果窗 ResultDlg + grab_screen
+  tray.py    常驻托盘图标
 
 保存位置：
   ~/.snaptext/img/    图片  YYYYMMDD_HHMMSS_XXX.png
@@ -20,7 +21,7 @@ import time
 
 from PySide6.QtCore import QObject, QRect, QThread, Qt, Signal
 from PySide6.QtGui import QGuiApplication
-from PySide6.QtWidgets import QApplication, QHBoxLayout, QLabel, QWidget
+from PySide6.QtWidgets import QApplication, QWidget
 
 from hotkey import GlobalHotkey
 from ocr import OcrEngine
@@ -30,11 +31,29 @@ from ui import ResultDlg, Selector, grab_screen
 APP_NAME = "拾字 SnapText"
 IMG_DIR = os.path.expanduser("~/.snaptext/img")
 TXT_DIR = os.path.expanduser("~/.snaptext/text")
+LOCK_PATH = os.path.expanduser("~/.snaptext/.lock")
 
 # (keysym, modifiers, mode)
 MODE_IMG = ("x", 8, "img")   # Alt+X：截图+存图+复制图片
 MODE_OCR = ("c", 8, "ocr")   # Alt+C：截图+存图+OCR+复制文字
-HOTKEY_LABEL = {"img": "Alt+X 截图保存复制", "ocr": "Alt+C 截图+OCR"}
+
+_lock_fd = None
+
+
+def acquire_single_instance() -> bool:
+    """防多开。多实例会抢同一个 XGrabKey 导致热键随机失效（已踩过）。"""
+    global _lock_fd
+    import fcntl
+
+    os.makedirs(os.path.dirname(LOCK_PATH), exist_ok=True)
+    fd = os.open(LOCK_PATH, os.O_RDWR | os.O_CREAT, 0o644)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        os.close(fd)
+        return False
+    _lock_fd = fd  # 持有到进程退出，进程死了锁自动释放
+    return True
 
 
 class OcrWorker(QObject):
@@ -75,22 +94,18 @@ class MainWin(QWidget):
         self._sel = None
         self._ocr = OcrEngine()
         self._ocr_thread = None
+        self._ocr_worker = None
         self._hotkeys = []
         self.setWindowTitle(APP_NAME)
         self.setWindowFlags(Qt.Tool | Qt.WindowStaysOnTopHint)
         os.makedirs(IMG_DIR, exist_ok=True)
         os.makedirs(TXT_DIR, exist_ok=True)
-        lay = QHBoxLayout(self)
-        lay.addWidget(QLabel("⚡ 截书"))
         # 热键回调跑在 X 轮询线程，经跨线程信号 marshal 到 GUI 线程
         self.hotkey_pressed.connect(self.start_select)
         for key, mods, mode in (MODE_IMG, MODE_OCR):
             hk = GlobalHotkey(key, mods, lambda m=mode: self.hotkey_pressed.emit(m))
             if hk.ok:
                 self._hotkeys.append(hk)
-                lay.addWidget(QLabel(f"<span style='color:#888'>{HOTKEY_LABEL[mode]}</span>"))
-            else:
-                lay.addWidget(QLabel(f"<span style='color:#c33'>{HOTKEY_LABEL[mode]} 注册失败</span>"))
 
     def start_select(self, mode):
         if self._busy:
@@ -109,7 +124,6 @@ class MainWin(QWidget):
     def _finish_cancel(self):
         self._sel = None
         self._busy = False
-        self.show()
 
     def _on_selected(self, r):
         src = self._sel._pix
@@ -134,9 +148,10 @@ class MainWin(QWidget):
             self._run_ocr(img_path, os.path.join(TXT_DIR, ts + ".txt"))
 
     def _finish(self, text, title="识别结果"):
-        self._busy = False
-        self.show()
+        # 弹窗期间保持 busy，阻止热键重入开启新选区
+        self._busy = True
         ResultDlg(text, title, self).exec()
+        self._busy = False
 
     def _run_ocr(self, img_path, txt_path):
         th = QThread(self)
@@ -152,6 +167,7 @@ class MainWin(QWidget):
         self._ocr_worker = wk
         self._ocr_thread = th
         th.finished.connect(lambda: setattr(self, "_ocr_worker", None))
+        th.finished.connect(lambda: setattr(self, "_ocr_thread", None))
         th.start()
 
     def _on_ocr_done(self, text):
@@ -166,13 +182,21 @@ class MainWin(QWidget):
         super().closeEvent(e)
 
     def cleanup(self):
-        """释放热键（QApplication 退出时可能不触发 closeEvent，需显式调）。"""
+        """退出时释放热键、等 OCR 线程收尾。"""
         for hk in self._hotkeys:
             hk.release()
         self._hotkeys.clear()
+        th = self._ocr_thread
+        if th is not None and th.isRunning():
+            th.quit()        # 正在跑 OCR 的 slot 返回后退出事件循环
+            th.wait(3000)
+        self._ocr_thread = None
 
 
 def main():
+    if not acquire_single_instance():
+        print("拾字 SnapText 已在运行（单实例），退出。", file=sys.stderr)
+        return 1
     app = QApplication(sys.argv)
     app.setApplicationName(APP_NAME)
     w = MainWin()
@@ -183,4 +207,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

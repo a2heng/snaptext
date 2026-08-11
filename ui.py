@@ -123,11 +123,17 @@ class ResultDlg(QDialog):
         copy_btn = QPushButton("复制")
         copy_btn.clicked.connect(self._copy)
         close_btn = QPushButton("关闭")
-        close_btn.clicked.connect(self.close)
+        close_btn.clicked.connect(self.reject)
         btns.addWidget(copy_btn)
         btns.addWidget(close_btn)
         lay.addLayout(btns)
         self.resize(420, 300)
+
+    def closeEvent(self, e):
+        # 任何关闭路径（按钮/WM 关闭）都以 reject 结束 exec()，避免主线程
+        # 卡在嵌套事件循环里被 WM 判定"未响应"
+        self.reject()
+        e.accept()
 
     def _copy(self):
         QGuiApplication.clipboard().setText(self._text)
