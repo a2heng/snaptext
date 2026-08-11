@@ -1,12 +1,12 @@
 # AGENTS.md — 拾字 SnapText
 
-极简本地截图 + 本地 onnx OCR 工具（Linux X11 / KDE Plasma）。不是 git 仓库，无
-requirements.txt，无测试/构建配置。
+极简本地截图 + 本地 onnx OCR 工具（Linux X11 / KDE Plasma）。**git 仓库**
+（main 分支，GitHub: `a2heng/snaptext`），无 requirements.txt、无测试/构建配置
+（无 CI）。改动提交后直接 `git log`/`git diff` 看修改路径。
 
 ## 运行与依赖
 
-- 运行：`python3 snaptext.py`（需 X11 `DISPLAY`，本机 `:0`）。验证改动用
-  `python3 -m py_compile snaptext.py` + 手动起托盘窗口。
+- 运行：`python3 snaptext.py`（需 X11 `DISPLAY`，本机 `:0`）。**单实例**：再开被拦截。
 - **全部依赖装系统 Python 3.14.6 用户 site-packages（`~/.local/...`），不用 venv**
   （符合 `/home/aheng/AGENTS.md` 的机器策略）。已装：PySide6 6.11.1、
   rapidocr-onnxruntime 1.2.3、onnxruntime 1.28.0、opencv-python 5.0.0.93、numpy 2.4.1。
@@ -18,32 +18,66 @@ requirements.txt，无测试/构建配置。
 - OCR 用 `rapidocr_onnxruntime`。**模型直接打包在 wheel 里**（包内
   `models/`：ch_PP-OCRv3_det/rec_infer.onnx、ch_ppocr_mobile_v2.0_cls_infer.onnx），
   首次调用即本地加载，**不联网下载、无镜像问题**。不要把模型丢进项目目录或重下。
-- 当前实现每张图都新建 `RapidOCR()` 实例（见 `OcrWorker.run`），首帧冷启动慢；
-  若要提速可复用单例。
+- `OcrEngine` 惰性建全局唯一 `RapidOCR` 单例复用（首帧冷启动约 0.7s）。
 
-## 现状：模块化拆分已完成
+## 模块架构
 
-已从单文件拆成四个独立 py，**这是 git 仓库（main 分支）**，改动提交后可直接
-`git log`/`git diff` 查看修改路径。无 requirements.txt、无测试/构建配置（无 CI）。
+拆成四个独立本地 py + 入口，各模块接口最小、可单独验证：
 
-- **`ocr.py`**：图片 → 文本最小模块（纯 onnx，**不依赖 Qt**）。`OcrEngine`
-  惰性建全局唯一 `RapidOCR` 单例复用（首帧冷启动约 0.7s）。接口
+- **`ocr.py`**：图片 → 文本最小模块（纯 onnx，**不依赖 Qt**）。接口
   `recognize_path(path)->str` / `recognize(img: BGR ndarray)->str`，失败抛
   `RuntimeError`。可命令行单跑：`python3 ocr.py <图片>`（stdout 吐文本，失败
   stderr+非零码）。
-- **`ui.py`**：只含 Qt/UI。`grab_screen()`（抓**可用区域**=屏幕减系统面板，避免
-  选区与 KDE 底栏错位/双底栏）、`Selector`（全屏拉框 overlay，几何与抓图同取
-  `availableGeometry()`，`selected(QRect)`/`cancelled()` 信号，5×5 最小选区，Esc
-  取消，小选区也 emit cancelled）。**无结果弹窗**（不再有 ResultDlg）。
+- **`ui.py`**：只含 Qt/UI。`grab_screen()`（抓全屏含系统面板）、`Selector`
+  （全屏拉框 overlay，**`X11BypassWindowManagerHint`** 绕过 WM 盖住 KDE 底栏，
+  `selected(QRect)`/`cancelled()` 信号，5×5 最小选区，小选区也 emit cancelled）。
+  **无结果弹窗**（已删 ResultDlg）。override-redirect 收不到键盘事件，Esc 由
+  入口侧全局热键兜底。
 - **`hotkey.py`**：`GlobalHotkey(key, mods, on_press)`，ctypes 直调 libX11
   `XGrabKey`，**X11 专属，Wayland 下不工作**。`on_press` 在轮询线程回调，入口需
   用跨线程信号 marshal 到 GUI 线程。**不依赖 Qt**。可重复调用 `release()`。
-- **`snaptext.py`**：入口，接线三个模块。**两个快捷键都=截图+存图**：Alt+X
+- **`snaptext.py`**：入口，接线四个模块。**两个快捷键都=截图+存图**：Alt+X
   （keysym `x` + Mod1Mask=8）＝截图+存图+复制图片；Alt+C（`c`）＝截图+存图+OCR+
   复制文字。**全程无确认弹窗**，结果走托盘非阻塞气泡（`tray.notify`）。热键回调
   跑在 X 轮询线程，经 `hotkey_pressed` 信号 queued 到 GUI 线程。`OcrWorker` 复用
   已保存的 png 喂 `OcrEngine`，QThread 后台跑。**托盘模式，MainWin 不 show**；
-  单实例锁（`fcntl.flock`，多开会抢同一 XGrabKey 致热键失效）。
+  `setQuitOnLastWindowClosed(False)`（选区遮罩关闭不误退）；单实例锁
+  `acquire_single_instance()`。
+- **`tray.py`**：`TrayIcon`（程序化图标无资源文件），右键退出、左键提示热键、
+  `notify(title, msg)` 非阻塞气泡。
+
+数据流：热键(X线程) → 信号(GUI线程) → `start_select` 抓全屏 → Selector 拉框 →
+存 png → 复制图片 / QThread 后台 OCR → 存 txt → 复制文本 → 托盘气泡。
+
+## 设计哲学
+
+1. **极简**：一个功能只做一个，不堆配置不堆依赖。每层"最小可用"，够用即止。
+2. **本地优先**：一切本地处理。模型打包在依赖 wheel 里，不下载、不上传、无网络
+   依赖。剪贴板即"输出"，结果落盘即"存档"。
+3. **模块独立**：每层独立 py、接口最小、可单独跑验证（ocr 能 CLI 单跑；ui 可
+   offscreen import；hotkey 不依赖 Qt）。Ui/OCR/hotkey/tray 互相不掺。
+4. **零摩擦交互**：快捷键直达结果，无确认弹窗、无多步骤。反馈走托盘非阻塞气泡，
+   不打断当前工作。
+5. **所见即所得（1:1）**：选区覆盖全屏含系统面板，抓什么显示什么、存什么。高分屏
+   dpr 显式换算，坐标空间不含糊。
+6. **稳健优先于花哨**：单实例锁防热键冲突；线程/GC/高分屏/Xlib 等坑全部显式
+   处理并把结论写进本文件，改代码勿回退。
+
+## 实践（怎么做到上述哲学）
+
+- **拆层顺序**：ocr 驱动独立 → ui 独立 → 热键独立 → 托盘收尾。每步保持模块
+  "可单独跑"再往下拆。
+- **验证习惯**：`python3 -m py_compile *.py` →
+  `QT_QPA_PLATFORM=offscreen` 无界面 import → 模块单跑 → `xdotool` 注入真实热键
+  → `PYTHONMALLOC=malloc` 严格内存检查（pymalloc 会掩盖堆损坏）。改 GUI/热键必须
+  走真实进程 e2e（拖拽用 `xdotool mousemove ... mousedown 1 ... mousemove ... mouseup 1`
+  带 sleep 才稳定）。
+- **踩坑即沉淀**：每修一个非显而易见的问题，把结论写进 AGENTS.md（本文件即"踩坑
+  日志"），同时作为 git commit message。
+- **清理测试残留**：`pkill -9 -f 'snaptext[.]py'`（用 `[.]` 转义避免 pkill 匹配到
+  自身命令；注意别在命令里再写裸 `snaptext.py` 字样）。
+- **单实例测试**：`~/.snaptext.lock` 持锁为唯一实例；清数据目录（`~/.snaptext`）
+  不影响锁（锁在 `~/.snaptext.lock`）。
 
 ## Xlib 热键踩过的坑（hotkey.py 已修，改它时勿回退）
 
@@ -66,41 +100,16 @@ requirements.txt，无测试/构建配置。
 - **线程 finished 后 `deleteLater` 会删 C++ 对象**，再访问 `_ocr_thread.isRunning()`
   崩 `RuntimeError`；finished 时把 `_ocr_thread` 置 None。
 - **弹窗期间保持 `_busy`**：否则弹窗开着时再按热键会叠全屏选区遮罩，看起来程序
-  "未响应/关不掉"。`ResultDlg` 关闭统一走 `reject()` 保证 `exec()` 返回。
-- **单实例锁**：多开实例抢同一 XGrabKey，热键随机失效。`acquire_single_instance()`。
-
-## 运行与验证
-
-- 运行：`python3 snaptext.py`（需 X11 `DISPLAY`，本机 `:0`）。**单实例**：再开会被
-  拦截退出。
-- 验证：`python3 -m py_compile *.py`；`QT_QPA_PLATFORM=offscreen` 可无界面 import；
-  用 `xdotool key alt+x` 注入真实热键测试（注意会弹选区遮罩）；
-  严格内存检查用 `PYTHONMALLOC=malloc`（pymalloc 会掩盖堆损坏）。
-  清理测试残留实例：`pkill -f '[s]naptext.py'`（带方括号防误杀自身命令）。
-- **全部依赖装系统 Python 3.14.6 用户 site-packages（`~/.local/...`），不用 venv**
-  （符合 `/home/aheng/AGENTS.md` 的机器策略）。已装：PySide6 6.11.1、
-  rapidocr-onnxruntime 1.2.3、onnxruntime 1.28.0、opencv-python 5.0.0.93、numpy 2.4.1。
-- 装新依赖走 `pip3 install --user --break-system-packages`，默认走 NJU PyPI 镜像
-  （`/etc/pip.conf`）。
-
-## 模型（本地 onnx，无下载）
-
-- OCR 用 `rapidocr_onnxruntime`。**模型直接打包在 wheel 里**（包内
-  `models/`：ch_PP-OCRv3_det/rec_infer.onnx、ch_ppocr_mobile_v2.0_cls_infer.onnx），
-  首次调用即本地加载，**不联网下载、无镜像问题**。不要把模型丢进项目目录或重下。
+  "未响应/关不掉"。
+- **托盘 app 必须 `setQuitOnLastWindowClosed(False)`**：选区遮罩作为唯一可见窗口
+  关闭时会误触发 quit。
+- **override-redirect 窗口收不到键盘**：Esc 用临时全局热键兜底。
+- **单实例锁**：多开实例抢同一 XGrabKey，热键随机失效。锁在数据目录外
+  （`~/.snaptext.lock`），flock + 固定 UUID token（`<uuid>_SnapText`）+ PID 存活校验。
 
 ## 落盘与流程
 
-- 截图 `grabWindow(0)` 抓主屏 → `Selector` 全屏半透明拉框 overlay。
+- 截图 `grabWindow(0)` 抓全屏 → `Selector` 全屏半透明拉框 overlay（覆盖系统面板）。
 - 落盘 `~/.snaptext/img/`（png）、`~/.snaptext/text/`（txt），文件名
   `YYYYMMDD_HHMMSS_XXX`。
-- OCR 结果 `\n` 拼接，成功自动复制剪贴板 + 弹结果窗（可再复制/关闭）。
-
-## 目标架构（剩余最后一步）
-
-1. ✅ **ocr 驱动独立**：图片 → 文本最小模块（纯 onnx，不依赖 Qt/UI），CLI 可单跑。
-2. ✅ **ui 独立**：选区 + 结果窗，不掺热键/OCR 逻辑。
-3. ✅ **快捷键独立**：XGrabKey 热键模块（保持 X11 实现）。
-4. ⏳ **最后起托盘**：常驻托盘图标替代现在的小窗口（`tray.py`）。
-
-拆分时保持各模块接口简单可单独跑（ocr 模块应能从命令行吃一张图吐文本验证）。
+- OCR 结果 `\n` 拼接，成功自动复制剪贴板；反馈走托盘非阻塞气泡（无弹窗）。
