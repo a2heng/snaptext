@@ -1,29 +1,33 @@
 # AGENTS.md — 拾字 SnapText
 
 极简本地截图 + 本地 onnx OCR 工具（Linux X11 / KDE Plasma）。**git 仓库**
-（main 分支，GitHub: `a2heng/snaptext`），无 requirements.txt、无测试/构建配置
-（无 CI）。改动提交后直接 `git log`/`git diff` 看修改路径。
+（main 分支，GitHub: `a2heng/snaptext`），有 `requirements.txt`、tag 触发 CI
+（`.github/workflows/build-deb.yml`）。改动提交后直接 `git log`/`git diff`
+看修改路径。
 
 ## 运行与依赖
 
 - 运行：`python3 snaptext.py`（需 X11 `DISPLAY`，本机 `:0`）。**单实例**：再开被拦截。
-- **依赖内化进项目 `vendor/`**（类似"项目内 venv"，**不进 git**，`.gitignore` 已排除）：
-  克隆后首次联网跑 `./setup-vendor.sh`（默认装 OCR 链 + PySide6），之后完全离线、
-  无需任何 `pip install`。追加包：`./setup-vendor.sh <包名>…`。
-- `ocr.py` / `snaptext.py` 顶部 `import _vendor; _vendor.activate()` 把 `vendor/`
-  插到 `sys.path[0]`，优先加载项目内置依赖。**新 py 模块 import 第三方库前必须先
-  activate**（参考 ocr.py 的写法）。
-- 依赖走 NJU PyPI 镜像（`/etc/pip.conf`）。本机 vendor 已生成（PySide6 6.11.1、
-  rapidocr-onnxruntime 1.2.3、onnxruntime 1.28.0、opencv-python 5.0.0.93、
-  numpy 2.5.2 等，约 1GB）。
+- **依赖走系统/全局 site-packages，无 vendor、无项目内 venv**：
+  `python3 -m pip install -r requirements.txt` 装一次即可（PySide6 + OCR 链）。
+  `requirements.txt` 用新版 unified `rapidocr`（3.x，旧 rapidocr-onnxruntime 停更）。
+- `_bootstrap.py`：deb 产物里把项目内置 `lib/`（无系统包的 rapidocr/shapely/
+  pyclipper/omegaconf/antlr4）插到 `sys.path`；源码直跑时 `lib/` 不存在 = 空操作，
+  走系统包。`ocr.py` / `snaptext.py` 顶部 `import _bootstrap; _bootstrap.activate()`。
 
 ## 模型（本地 onnx，随仓库打包）
 
-- **模型已直接打进项目 `models/` 目录**（随 git 提交，共 14MB：ch_PP-OCRv3
-  det/rec、ch_ppocr_mobile_v2.0_cls），真正离线、不依赖 wheel 内置模型。
-- `ocr.py` 的 `_MODELS` 指向项目内模型，经 `RapidOCR(det_model_path=...,
-  rec_model_path=..., cls_model_path=...)` 加载；项目内缺失时才回退 wheel
-  内置模型。**更新模型时直接替换 `models/` 下文件即可**。
+- **模型已直接打进项目 `models/` 目录**（随 git 提交，共 31MB：PP-OCRv6
+  det/rec + LCNet 方向分类器，**保留官方文件名**，真正离线、不依赖 wheel 内置模型）。
+- `ocr.py` 的 `_MODELS` 指向项目内模型，经 `RapidOCR(params={"Det.model_path":...,
+  "Rec.model_path":..., "Cls.model_path":...})` 加载；指定 model_path 即离线、不触发下载。
+- **`Cls.ocr_version` 必须设 `PPOCRV5`**：rapidocr 3.x 的 cls 形状表只有 v4/v5
+  （`CLS_SHAPE_BY_OCR_VERSION`），v6 没有自己的 cls、复用 v5 的 LCNet（输入
+  `[3,80,160]`）；设 v6 会 KeyError，设 v4 维度不匹配报错。Det/Rec 设 `PPOCRV6`。
+- **更新模型时直接替换 `models/` 下文件即可，勿改名**（官方原名，见下「模型版本」节）。
+- **模型版本选 v6（2026-08-12 实测对比）**：v5 vs v6 在同测试板/代码注释/难字/
+  多场景实测，v6 在 9 项里 6 项胜出（代码注释保真、路径、键值对空格、邮箱、小字、
+  速度），仅生僻字略逊；体积 +9M（共 31M）。生僻字对屏幕 OCR 使用频率低，故取 v6。
 - `OcrEngine` 惰性建全局唯一 `RapidOCR` 单例复用（首帧冷启动约 0.7s）。
 
 ## 模块架构
@@ -65,15 +69,13 @@
 ## 设计哲学
 
 1. **极简**：一个功能只做一个，不堆配置不堆依赖。每层"最小可用"，够用即止。
-2. **本地优先**：一切本地处理。模型打包在依赖 wheel 里，不下载、不上传、无网络
-   依赖。剪贴板即"输出"，结果落盘即"存档"。
-3. **模块独立**：每层独立 py、接口最小、可单独跑验证（ocr 能 CLI 单跑；ui 可
+2. **模块独立**：每层独立 py、接口最小、可单独跑验证（ocr 能 CLI 单跑；ui 可
    offscreen import；hotkey 不依赖 Qt）。Ui/OCR/hotkey/tray 互相不掺。
-4. **零摩擦交互**：快捷键直达结果，无确认弹窗、无多步骤。反馈走托盘非阻塞气泡，
+3. **零摩擦交互**：快捷键直达结果，无确认弹窗、无多步骤。反馈走托盘非阻塞气泡，
    不打断当前工作。
-5. **所见即所得（1:1）**：选区覆盖全屏含系统面板，抓什么显示什么、存什么。高分屏
+4. **所见即所得（1:1）**：选区覆盖全屏含系统面板，抓什么显示什么、存什么。高分屏
    dpr 显式换算，坐标空间不含糊。
-6. **稳健优先于花哨**：单实例锁防热键冲突；线程/GC/高分屏/Xlib 等坑全部显式
+5. **稳健优先于花哨**：单实例锁防热键冲突；线程/GC/高分屏/Xlib 等坑全部显式
    处理并把结论写进本文件，改代码勿回退。
 
 ## 实践（怎么做到上述哲学）
@@ -136,14 +138,25 @@
 
 ## OCR 踩过的坑（ocr.py 已修，改它时勿回退）
 
-- **RapidOCR 对宽高比极大的图会跳过 det、直接整图喂 rec** → 识别为空。源码：
-  `rapid_ocr_api.py` 里 `use_limit_ratio = w / h > self.width_height_ratio`
-  （默认 `width_height_ratio: 8`，Global 级参数），为 True 时走
-  `get_boxes_img_without_det`（整图当一块）。实测 106×1090 窄条（比值 10.3）因此
-  返回空，但单独调 det 能出 23 个框。**修复：`RapidOCR(..., width_height_ratio=100)`**
-  （注意是 **Global 级无前缀**，带 `det_` 前缀不会生效——UpdateParameters 把
-  `det_` 前缀剥掉后映射到 Det 段，而 `width_height_ratio` 在 Global 段，静默无效）。
-- det 出的裁剪块高 17-42px 的小字块 rec 仍能识别（0.68-0.92 分），只要走 det 就没问题。
+- **新版 unified `rapidocr`（3.x）迁移（2026-08-12）**：旧 `rapidocr-onnxruntime`
+  停更，`ocr.py` 已迁到 `from rapidocr import RapidOCR`。API 变化：
+  - 参数形式从 `RapidOCR(det_model_path=...)` 改为 `RapidOCR(params={"Det.model_path":...,
+    "Rec.model_path":..., "Cls.model_path":...})`（"段.键" 形式，段∈Global/Det/Cls/Rec/EngineConfig）。
+  - 输出从 `(results, elapse)` 二元组改为 `RapidOCROutput(boxes, txts, scores)` 对象；
+    `_to_results()` 适配成旧 `[(box,text,score),...]` 喂给 `_merge_to_lines`。
+  - 枚举参数（`ocr_version`/`model_type`/`lang_type`）必须传 Enum，如
+    `OCRVersion.PPOCRV6`，不能传字符串。
+  - rec 从 onnx 模型内嵌字符表（`have_key()`），不会下载 dict。
+- **宽高比跳过 det 的坑，新版语义变了**：旧 rapidocr_onnxruntime 对宽高比 >
+  `width_height_ratio`（默认 8）的窄条**跳过 det、整图直喂 rec** → 识别为空。
+  新版 rapidocr 3.x 改为 **`apply_vertical_padding` 给窄条加竖直 padding** 再走 det，
+  `Global.width_height_ratio` 变成"触发 padding 的阈值"。`OCR_WIDTH_HEIGHT_RATIO=100`
+  沿用（几乎不触发 padding，窄条也正常）。**注意参数是 `Global.` 前缀**，不是 `det_`。
+- **det 长边封顶（性能）**：新版 rapidocr 3.x 的 det 在 `limit_type='max'` 时按
+  `max_wh` 自动选 960/1500/2000 封顶，`Det.limit_side_len=960` 语义延续
+  （长边封顶、32 对齐）。`Det.limit_type='max'` + `Det.limit_side_len=960` 让扁图/
+  4K 都不全尺寸推理（旧版 `limit_type='min'` 会把 694×50 扁图放大成 10200×736，
+  3-4 秒）。实测 4K 全屏 ~1s、扁图 ~0.5s。
 - **行合并 `_merge_to_lines`（旋转稳健）**：det 按连通域出框，一行内有大间隙（标签页/
   菜单项等）会切成多个词块框 → 逐框输出"换行过频"。修复：用 `minAreaRect` 求每框
   方向角（归一到 (-90,90]，`angle%180` 后 `>90` 减 180 处理 179.5→-0.5 的环绕），
@@ -151,14 +164,6 @@
   （基准取两框中较矮者）"聚类成行，同行内沿文本方向排序空格连接。**判据要点**：紧挨
   的两行文字法线区间可能搭界 2px，但重叠比例极低（行高 27/44 时仅 7%），不会误连；
   而同一行框重叠比例 90%+。旋转/倾斜文本投影到同一法线上仍同属一行，天然稳健。
-- **det 默认短边拉 736 → 扁图推理爆炸（2026-08-12 性能根因）**：det 的
-  `DetResizeForTest.resize_image_type0` 默认 `limit_type='min'`（短边拉到 736），
-  694×50 扁图被放大成 10200×736 巨图，OCR 要 3-4 秒（越扁越慢）；4K 全屏
-  3840×2160 也全尺寸推理。**修复：`RapidOCR(..., det_limit_type='max',
-  det_limit_side_len=960)`**（Det 段参数，带 `det_` 前缀）。改后 694×50 → 0.5s、
-  4K → 0.95s，实测准确率无退化。
-- **白边方案无效**：给窄条上下/四周加白边后 det 反而出更多碎片（20-22 框）且产生
-  跨行错合并（如"软件介绍／windows"）。别用加白边解决换行过频。
 - **竖排文本是 det 能力边界**：PP-OCR det 按连通域出框，两列竖排文字被 unclip 弥合
   成一个框（angle≈0），任何后处理都无法分行。属模型固有短板，非行合并可解。
 
@@ -182,6 +187,29 @@
   剪贴板。
 - 配置项清单以 config.py 注释为准；新增配置项 = `DEFAULTS` + `_VALIDATORS`
   各加一条，`get(name)` 取用。
+
+## deb 打包（pack-deb.sh，2026-08-12）
+
+- **最小体积策略**：deb 只装 源码 + models + 少量"无系统包"依赖，PySide6/opencv/
+  onnxruntime/numpy 等走系统包（Depends 声明），deb 约 27MB。
+- 布局：`/opt/snaptext/{*.py, models/, lib/, snaptext.ico}` + `/usr/bin/snaptext`
+  （启动脚本）+ `.desktop` + hicolor 图标 + 文档。`_bootstrap.py` 把 `lib/` 插进 sys.path。
+- **剥进 lib/ 的依赖**（AOSC/Debian/Ubuntu 均无系统包）：rapidocr（弃内置 28M
+  模型）+ pyclipper + omegaconf + antlr4-python3-runtime。
+- **shapely 已用 numpy 公式 patch 掉（2026-08-12 精简大头）**：rapidocr 只在
+  `ch_ppocr_det/utils.py` 的 `unclip` 一处用 `Polygon.area/length`（算缩放距离），
+  用鞋带公式求面积 + 边长求和替代，结果完全一致（实测 0.00% 差），从而 lib/ 无需
+  打包 shapely（省 ~10MB，目标机也无需系统 shapely）。改 rapidocr 版本时需重验此 patch。
+- **colorlog 处理**：rapidocr 的 log.py 仅用于日志着色，打包时替换为标准库 logging
+  （完整重写，非 sed 补丁——只注释 import 会留 `colorlog.ColoredFormatter` 报错）。
+- **图标静态化（2026-08-12）**：`icons/`（png 多尺寸 + ico，托盘同款宋体 Black）
+  随仓库提交，打包时直接拷贝，**CI 不生成图标**（少一个故障点）。需重画时跑
+  `QT_QPA_PLATFORM=offscreen python3 make-icons.py` 并提交新 icons/。
+- **Depends 按发行版选包名**：`SNAPTEXT_DEPS` 环境变量覆盖，否则读 `/etc/os-release`
+  的 ID 选 AOSC（无 python3- 前缀）或 Debian 系（python3-*）命名。
+- 版本号：tag 触发 CI 时取 `GITHUB_REF_NAME`（去 v），本地跑回退当前时间。
+- **模型文件名必须保留官方原名**（PP-OCRv6_det_small.onnx / PP-OCRv6_rec_small.onnx /
+  ch_PP-LCNet_x0_25_textline_ori_cls_mobile.onnx），勿自定义改名。
 
 ## 落盘与流程
 

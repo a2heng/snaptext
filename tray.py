@@ -3,10 +3,35 @@
 只含 Qt/UI：QSystemTrayIcon + 右键菜单（退出）。热键/OCR 逻辑不掺进来。
 """
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QColor, QIcon, QPainter, QPixmap
+from PySide6.QtGui import (
+    QColor,
+    QFont,
+    QFontDatabase,
+    QIcon,
+    QPainter,
+    QPixmap,
+)
 from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
 APP_NAME = "拾字 SnapText"
+
+# 与 make-icons.py 保持一致：宋体 Black、字号占边长 0.55，托盘/deb 图标同款。
+_BG = QColor("#2b5f9c")
+_FG = QColor("#ffffff")
+_CHAR = "拾"
+_FONT_PATH = "/usr/share/fonts/TTF/NotoSerifCJK-Black.ttc"
+_FONT_PT_RATIO = 0.55
+_font_family = None
+
+
+def _char_font(size: int) -> QFont:
+    global _font_family
+    if _font_family is None:
+        fid = QFontDatabase.addApplicationFont(_FONT_PATH)
+        _font_family = QFontDatabase.applicationFontFamilies(fid)[0]
+    f = QFont(_font_family)
+    f.setPointSizeF(size * _FONT_PT_RATIO)
+    return f
 
 
 def make_icon() -> QIcon:
@@ -15,15 +40,12 @@ def make_icon() -> QIcon:
     pm.fill(Qt.transparent)
     p = QPainter(pm)
     p.setRenderHint(QPainter.Antialiasing)
-    p.setBrush(QColor("#2b5f9c"))
+    p.setBrush(_BG)
     p.setPen(Qt.NoPen)
-    p.drawRoundedRect(0, 0, 64, 64, 12, 12)
-    p.setPen(QColor("#ffffff"))
-    font = p.font()
-    font.setPointSize(26)
-    font.setBold(True)
-    p.setFont(font)
-    p.drawText(pm.rect(), Qt.AlignCenter, "拾")
+    p.drawRoundedRect(0, 0, 64, 64, 7, 7)
+    p.setPen(_FG)
+    p.setFont(_char_font(64))
+    p.drawText(pm.rect(), Qt.AlignCenter, _CHAR)
     p.end()
     return QIcon(pm)
 

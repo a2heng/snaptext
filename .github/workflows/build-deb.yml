@@ -1,0 +1,86 @@
+name: SnapText CI
+
+on:
+  # Only tag pushes (v...) run CI: everyday branch commits must stay cheap.
+  # Manually trigger via workflow_dispatch to verify without tagging.
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+jobs:
+  linux:
+    name: Linux
+    runs-on: ubuntu-latest
+    container:
+      image: ubuntu:latest
+    steps:
+      # Install system deps BEFORE checkout: containers have no git/python.
+      # pack-deb.sh needs: python3+pip (download wheels) + unzip (extract) +
+      # dpkg-deb (build .deb, comes with dpkg). Icons are committed, so no Qt needed.
+      - name: Install system dependencies
+        run: |
+          apt-get update -qq
+          DEBIAN_FRONTEND=noninteractive apt-get install -y -qq python3 python3-pip unzip
+
+      - uses: actions/checkout@v5
+
+      # Timestamp mirrors PureVox: tag v* -> tag version (v2026.08.12.1517 -> 2026.08.12.1517),
+      # else build time. Used for artifact naming so it matches the tag.
+      - name: Set build timestamp (tag v* -> tag version; else now)
+        id: ts
+        run: |
+          if [[ "${GITHUB_REF_NAME:-}" == v* ]]; then
+            stamp="${GITHUB_REF_NAME#v}"
+            stamp="${stamp//./-}"
+            echo "stamp=$stamp" >> "$GITHUB_OUTPUT"
+          else
+            echo "stamp=$(date +'%Y-%m-%d-%H%M')" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Compile all Python sources (catch syntax errors before packaging)
+        run: python3 -m py_compile snaptext.py ocr.py ui.py hotkey.py tray.py config.py _config.py _bootstrap.py
+
+      - name: Package deb
+        run: |
+          bash pack-deb.sh
+          ls -lh dist/snaptext-Linux-amd64-*.deb
+          dpkg-deb --info dist/snaptext-Linux-amd64-*.deb | sed -n '1,14p'
+
+      - name: Verify icons embedded
+        run: |
+          dpkg-deb -c dist/snaptext-Linux-amd64-*.deb | grep -c 'snaptext\.png' >/dev/null && echo "icons OK"
+          dpkg-deb -c dist/snaptext-Linux-amd64-*.deb | grep -c 'snaptext\.ico' >/dev/null && echo "ico OK"
+
+      - name: Upload deb artifact
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: snaptext-Linux-amd64-${{ steps.ts.outputs.stamp }}-release
+          path: dist/snaptext-Linux-amd64-*.deb
+          if-no-files-found: error
+
+  release:
+    name: Release (tag -> attach deb)
+    runs-on: ubuntu-latest
+    needs: [linux]
+    # Only when a tag is pushed (e.g. v2026.08.12.1517). The build job re-runs for
+    # that exact ref so the release carries this tag's artifacts.
+    if: startsWith(github.ref, 'refs/tags/')
+    permissions:
+      contents: write
+    steps:
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v7.0.0
+        with:
+          path: artifacts
+
+      - name: Create GitHub release with artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cd artifacts
+          files=$(find . -type f | sort | tr '\n' ' ')
+          gh release create -R "${GITHUB_REPOSITORY}" "${GITHUB_REF_NAME}" \
+            --title "SnapText ${GITHUB_REF_NAME}" \
+            --notes "自动发布：tag ${GITHUB_REF_NAME} 对应的 CI 构建产物（deb）。" \
+            $files
