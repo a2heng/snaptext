@@ -1,2 +1,5 @@
 __pycache__/
 *.pyc
+
+# 依赖内化目录：首次联网跑 setup-vendor.sh 生成，不进 git
+vendor/

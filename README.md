@@ -16,16 +16,19 @@
 ## 环境要求
 
 - Linux + **X11**（全局热键用 XGrabKey，**Wayland 下不工作**），KDE Plasma 下测试。
-- Python 3.14+。依赖装系统 Python 用户 site-packages，无需 venv：
+- Python 3.14+。
+
+### 依赖内化（vendor/，类似项目内 venv）
+
+依赖已内化到 `vendor/` 目录（**不进 git**），克隆后只需联网跑一次：
 
 ```bash
-pip3 install --user --break-system-packages \
-  PySide6 rapidocr-onnxruntime onnxruntime opencv-python numpy
+./setup-vendor.sh        # 安装全部默认依赖（OCR 链 + PySide6）
+./setup-vendor.sh <包>…  # 追加安装任意包
 ```
 
-> **模型已直接打包进本项目**（`models/` 目录随仓库提交，共 14MB）：ch_PP-OCRv3
-> det/rec、ch_ppocr_mobile cls。装好依赖即可离线使用，无需下载模型、无镜像问题。
-> `ocr.py` 优先加载项目内模型，缺失时才回退 `rapidocr-onnxruntime` wheel 内置模型。
+之后完全离线运行，无需再 `pip install`。`ocr.py` / `snaptext.py` 启动时会自动
+把 `vendor/` 插到 `sys.path` 最前（见 `_vendor.py`），优先加载项目内置依赖。
 
 ## 运行与使用
 
@@ -51,8 +54,10 @@ snaptext.py   入口：接线四模块，热键→选区→存盘→复制/OCR �
   │               CLI 可单跑：python3 ocr.py <图片>
   ├── ui.py       选区 Selector（全屏 override-redirect 遮罩）+ grab_screen
   ├── hotkey.py   全局热键 GlobalHotkey（ctypes 直调 libX11 XGrabKey，Qt-free）
-  └── tray.py     托盘图标 TrayIcon（程序化图标，无外部资源）
-  └── models/     三个 onnx 模型文件（随仓库打包，真正离线）
+  ├── tray.py     托盘图标 TrayIcon（程序化图标，无外部资源）
+  ├── _vendor.py  依赖内化引导：把 vendor/ 插到 sys.path 最前
+  ├── models/     三个 onnx 模型文件（随仓库打包，真正离线）
+  └── vendor/     内化依赖（setup-vendor.sh 生成，不进 git）
 ```
 
 关键接口：
