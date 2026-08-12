@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
 """拾字 SnapText —— 极简屏幕 OCR（入口：接线 ocr/hotkey/ui/tray 独立模块）
 
-全局快捷键（X11）：
-  Alt+X  截图 → 保存选区图片 → 复制图片到剪贴板
-  Alt+C  截图 → 保存图片 → OCR → 保存文本 → 复制文字到剪贴板
+全局快捷键（X11，可改，见 config.py）：
+  Alt+X（默认）截图 → 保存选区图片 → 复制图片到剪贴板
+  Alt+C（默认）截图 → 保存图片 → OCR → 保存文本 → 复制文字到剪贴板
 
 模块：
   ocr.py     图片 → 文本（纯 onnx，Qt-free，可命令行单跑）
   hotkey.py  全局热键 XGrabKey（X11，Qt-free）
-  ui.py      选区 Selector + 结果窗 ResultDlg + grab_screen
+  ui.py      选区 Selector + ResultDlg + grab_screen
   tray.py    常驻托盘图标
 
-保存位置：
+保存位置（可改，见 config.py）：
   ~/.snaptext/img/    图片  YYYYMMDD_HHMMSS_XXX.png
   ~/.snaptext/text/   文本  YYYYMMDD_HHMMSS_XXX.txt
 """
@@ -24,8 +24,10 @@ import _vendor
 
 _vendor.activate()
 
+import _config as cfg
+
 from PySide6.QtCore import QObject, QRect, QThread, Qt, Signal
-from PySide6.QtGui import QGuiApplication
+from PySide6.QtGui import QGuiApplication, QImage
 from PySide6.QtWidgets import QApplication, QWidget
 
 from hotkey import GlobalHotkey
@@ -34,14 +36,19 @@ from tray import TrayIcon
 from ui import Selector, grab_screen
 
 APP_NAME = "拾字 SnapText"
-IMG_DIR = os.path.expanduser("~/.snaptext/img")
-TXT_DIR = os.path.expanduser("~/.snaptext/text")
+DATA_DIR = os.path.expanduser(cfg.get("DATA_DIR"))
+IMG_DIR = os.path.join(DATA_DIR, "img")
+TXT_DIR = os.path.join(DATA_DIR, "text")
 # 锁文件放数据目录外：清空/删除 ~/.snaptext 不影响单例锁（flock 依赖文件持续存在）
-LOCK_PATH = os.path.expanduser("~/.snaptext.lock")
+LOCK_PATH = os.path.expanduser(cfg.get("LOCK_PATH"))
 
-# (keysym, modifiers, mode)
-MODE_IMG = ("x", 8, "img")   # Alt+X：截图+存图+复制图片
-MODE_OCR = ("c", 8, "ocr")   # Alt+C：截图+存图+OCR+复制文字
+# (keysym, modifiers, mode) —— 来自 config.py，默认 alt+x / alt+c（现状）
+MODES = [
+    (*cfg.parse_hotkey(cfg.get("HOTKEY_IMAGE")), "img"),
+    (*cfg.parse_hotkey(cfg.get("HOTKEY_OCR")), "ocr"),
+]
+
+_SAVE_IMAGES = cfg.get("SAVE_IMAGES")
 
 
 def _prewarm_engine():
@@ -112,30 +119,48 @@ def acquire_single_instance() -> bool:
 
 
 class OcrWorker(QObject):
-    """后台 OCR（QThread）：吃图片路径，吐文本。"""
+    """后台 OCR（QThread）：吃图片路径（SAVE_IMAGES=True）或内存 QPixmap，吐文本。"""
 
     done = Signal(str)
 
-    def __init__(self, engine: OcrEngine, img_path: str, txt_path: str):
+    def __init__(self, engine: OcrEngine, img_or_path, txt_path):
         super().__init__()
         self._engine = engine
-        self._img_path = img_path
+        self._img_or_path = img_or_path
         self._txt_path = txt_path
 
     def run(self):
         try:
-            text = self._engine.recognize_path(self._img_path)
+            if isinstance(self._img_or_path, str):
+                text = self._engine.recognize_path(self._img_or_path)
+            else:
+                text = self._engine.recognize(_qpixmap_to_bgr(self._img_or_path))
         except Exception as ex:
             self.done.emit(f"[OCR 失败] {ex}")
             return
         if text:
-            try:
-                with open(self._txt_path, "w", encoding="utf-8") as f:
-                    f.write(text + "\n")
-            except OSError as ex:
-                self.done.emit(f"[保存文本失败] {ex}\n\n{text}")
-                return
+            if self._txt_path:
+                try:
+                    with open(self._txt_path, "w", encoding="utf-8") as f:
+                        f.write(text + "\n")
+                except OSError as ex:
+                    self.done.emit(f"[保存文本失败] {ex}\n\n{text}")
+                    return
         self.done.emit(text)
+
+
+def _qpixmap_to_bgr(pix):
+    """QPixmap → BGR ndarray（SAVE_IMAGES=False 时 OCR 走内存不落盘）。"""
+    import cv2
+    import numpy as _np
+
+    img = pix.toImage().convertToFormat(QImage.Format_RGB888)
+    ptr = img.bits()
+    ptr.setsize(img.sizeInBytes())
+    arr = _np.frombuffer(ptr, _np.uint8).reshape(
+        img.height(), img.bytesPerLine(), 3)[:, : img.width()]
+    arr = _np.ascontiguousarray(arr)  # 拷贝脱离 QImage 生命周期，避免悬空
+    return cv2.cvtColor(arr, cv2.COLOR_RGB2BGR)
 
 
 class MainWin(QWidget):
@@ -157,19 +182,21 @@ class MainWin(QWidget):
         self._hotkeys = []
         self.setWindowTitle(APP_NAME)
         self.setWindowFlags(Qt.Tool | Qt.WindowStaysOnTopHint)
-        os.makedirs(IMG_DIR, exist_ok=True)
-        os.makedirs(TXT_DIR, exist_ok=True)
+        if _SAVE_IMAGES:
+            os.makedirs(IMG_DIR, exist_ok=True)
+            os.makedirs(TXT_DIR, exist_ok=True)
         # 热键回调跑在 X 轮询线程，经跨线程信号 marshal 到 GUI 线程
         self.hotkey_pressed.connect(self.start_select)
         self.hotkey_escape.connect(self._finish_cancel)
-        for key, mods, mode in (MODE_IMG, MODE_OCR):
+        for key, mods, mode in MODES:
             hk = GlobalHotkey(key, mods, lambda m=mode: self.hotkey_pressed.emit(m))
             if hk.ok:
                 self._hotkeys.append(hk)
         # 启动即后台预热 onnx 模型：模型加载约 0.8s（含 session 创建），
         # 放后台线程提前做完，首次按键不用等。OcrEngine._get_engine 是惰性
         # 单例，线程安全无锁但重复调用无害（首次真的建，后续直接拿引用）。
-        threading.Thread(target=_prewarm_engine, daemon=True).start()
+        if cfg.get("PREWARM_OCR"):
+            threading.Thread(target=_prewarm_engine, daemon=True).start()
 
     def _start_next_or_idle(self):
         """当前任务收尾后调用：忙队里还有就继续下一个，没有则空闲。"""
@@ -196,7 +223,7 @@ class MainWin(QWidget):
         self._sel.raise_()
         self._sel.activateWindow()
         # override-redirect 窗口收不到键盘事件，Esc 用临时全局热键兜底
-        self._esc = GlobalHotkey("Escape", 0, lambda: self.hotkey_escape.emit())
+        self._esc = GlobalHotkey(cfg.get("ESC_KEY"), 0, lambda: self.hotkey_escape.emit())
 
     def _release_esc(self):
         if self._esc is not None:
@@ -224,19 +251,27 @@ class MainWin(QWidget):
         )
         self._release_esc()
         self._sel = None
+        img_path = None
+        txt_path = None
         ts = time.strftime("%Y%m%d_%H%M%S") + f"_{int(time.time() * 1000) % 1000:03d}"
-        img_path = os.path.join(IMG_DIR, ts + ".png")
-        pix.save(img_path, "PNG")
+        if _SAVE_IMAGES:
+            img_path = os.path.join(IMG_DIR, ts + ".png")
+            pix.save(img_path, "PNG")
+            txt_path = os.path.join(TXT_DIR, ts + ".txt")
         if self._mode == "img":
             QGuiApplication.clipboard().setPixmap(pix)
-            self._notify("已保存并复制图片", ts + ".png")
+            self._notify(
+                "已保存并复制图片" if img_path else "已复制图片",
+                os.path.basename(img_path) if img_path else "（未存盘）",
+            )
             self._start_next_or_idle()
         else:
-            self._run_ocr(img_path, os.path.join(TXT_DIR, ts + ".txt"))
+            # SAVE_IMAGES=False 时图片只留在内存，OCR 直接吃 QPixmap
+            self._run_ocr(img_path or pix, txt_path)
 
     def _notify(self, title, msg):
         if self._tray is not None:
-            self._tray.notify(title, msg)
+            self._tray.notify(title, msg, cfg.get("NOTIFY_MS"))
 
     def _run_ocr(self, img_path, txt_path):
         th = QThread(self)
@@ -291,7 +326,11 @@ def main():
     # 托盘 app 不应随"最后一个窗口关闭"退出（选区遮罩关闭会误触发）
     app.setQuitOnLastWindowClosed(False)
     w = MainWin()
-    tray = TrayIcon(w)
+    tray = TrayIcon(
+        w,
+        hk_img=cfg.hotkey_display(cfg.get("HOTKEY_IMAGE")),
+        hk_ocr=cfg.hotkey_display(cfg.get("HOTKEY_OCR")),
+    )
     w._tray = tray
     app.aboutToQuit.connect(w.cleanup)
     tray.show()

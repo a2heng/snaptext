@@ -2,9 +2,15 @@
 
 只含 Qt/UI 逻辑：不掺热键、不掺 OCR。其它模块通过 grab_screen / Selector 调用。
 """
+import _config
+
 from PySide6.QtCore import QPoint, QPointF, QRect, QRectF, Qt, Signal
 from PySide6.QtGui import QColor, QGuiApplication, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import QWidget
+
+_MIN_SIZE = _config.get("SELECT_MIN_SIZE")
+_MASK_ALPHA = _config.get("SELECT_MASK_ALPHA")
+_BORDER_COLOR = QColor(_config.get("SELECT_BORDER_COLOR"))
 
 
 def grab_screen() -> QPixmap:
@@ -59,7 +65,7 @@ class Selector(QWidget):
             QRectF(0, 0, self._pix.width(), self._pix.height()),
         )
         # 半透明黑遮罩
-        p.fillRect(self.rect(), QColor(0, 0, 0, 100))
+        p.fillRect(self.rect(), QColor(0, 0, 0, _MASK_ALPHA))
         r = self.sel_rect()
         if self._selecting and not r.isNull():
             # 选区原位还原：source 用设备像素（r * dpr），target 用逻辑 r
@@ -69,7 +75,7 @@ class Selector(QWidget):
                 QRectF(r.x() * dpr, r.y() * dpr, r.width() * dpr, r.height() * dpr),
             )
             # 蓝框
-            p.setPen(QPen(QColor(0, 120, 215), 2))
+            p.setPen(QPen(_BORDER_COLOR, 2))
             p.drawRect(r)
             # "宽 × 高" 尺寸文字（带底衬保证可读）
             label = f"{r.width()} × {r.height()}"
@@ -97,7 +103,7 @@ class Selector(QWidget):
         if ev.button() == Qt.LeftButton and self._selecting:
             self._selecting = False
             r = self.sel_rect()
-            if r.width() >= 5 and r.height() >= 5:
+            if r.width() >= _MIN_SIZE and r.height() >= _MIN_SIZE:
                 self.selected.emit(r)
             else:
                 self.cancelled.emit()  # 太小视为取消

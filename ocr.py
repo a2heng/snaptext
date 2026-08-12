@@ -8,6 +8,7 @@
 import sys
 from pathlib import Path
 
+import _config
 import _vendor
 
 _vendor.activate()
@@ -36,14 +37,14 @@ def _get_engine() -> RapidOCR:
             # 坑1：RapidOCR 对宽高比 > width_height_ratio 的图会跳过 det、整图直喂 rec，
             # 极窄条（如 106x1090）因此识别为空。该参数是 Global 级（无前缀），
             # 调大让窄条也走 det。
-            width_height_ratio=100,
+            width_height_ratio=_config.get("OCR_WIDTH_HEIGHT_RATIO"),
             # 坑2：det 默认 limit_type='min'（短边拉到 736）——扁图（694x50）被
             # 放大成 10200x736 的巨大输入，OCR 要 3-4 秒；4K 全屏 3840x2160 也
             # 全尺寸推理很慢。改 limit_type='max' + limit_side_len=960（长边
             # 封顶 960，32 对齐）后所有尺寸降到 ~0.6-1s，实测准确率无退化。
             # 这两个是 Det 段参数（带 det_ 前缀，UpdateParameters 会剥前缀映射）。
-            det_limit_type="max",
-            det_limit_side_len=960,
+            det_limit_type=_config.get("OCR_DET_LIMIT_TYPE"),
+            det_limit_side_len=_config.get("OCR_DET_LIMIT_SIDE_LEN"),
         )
     return _engine
 

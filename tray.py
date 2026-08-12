@@ -31,9 +31,11 @@ def make_icon() -> QIcon:
 class TrayIcon(QSystemTrayIcon):
     """常驻托盘图标。右键菜单：退出。左键点击提示热键用法。"""
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, hk_img="Alt+X", hk_ocr="Alt+C"):
         super().__init__(make_icon(), parent)
-        self.setToolTip(f"{APP_NAME}\nAlt+X 截图保存复制\nAlt+C 截图+OCR")
+        self._hk_img = hk_img
+        self._hk_ocr = hk_ocr
+        self.setToolTip(f"{APP_NAME}\n{hk_img} 截图保存复制\n{hk_ocr} 截图+OCR")
         menu = QMenu()
         quit_action = menu.addAction("退出")
         quit_action.triggered.connect(self._quit)
@@ -44,7 +46,7 @@ class TrayIcon(QSystemTrayIcon):
         if reason == QSystemTrayIcon.Trigger:
             self.showMessage(
                 APP_NAME,
-                "Alt+X 截图保存复制\nAlt+C 截图+OCR",
+                f"{self._hk_img} 截图保存复制\n{self._hk_ocr} 截图+OCR",
                 QSystemTrayIcon.Information,
                 3000,
             )

@@ -43,6 +43,14 @@ python3 snaptext.py
 - 单实例锁文件：`~/.snaptext.lock`（UUID token + flock + PID 校验）。
 - 退出：托盘图标右键 → 退出。
 
+## 配置
+
+`config.py` 是一个**全注释配置模板**：不改它 = 保持现状（默认行为）。想改哪项，
+就取消注释对应示例行、改成你要的值，重启程序生效。可调项：全局热键、数据目录、
+OCR 清晰度/速度权衡（`OCR_DET_LIMIT_SIDE_LEN`）、选区样式（遮罩黑度/蓝框色/最小
+选区）、`SAVE_IMAGES`（False = 结果只进剪贴板、不落盘）。配置读写在 `_config.py`
+（只依赖标准库），写错名字/类型/值会**静默回退默认**并在启动 stderr 给警示。
+
 ## 开发逻辑（模块架构）
 
 拆分为四个独立本地 py + 入口，各模块接口最小、可单独验证：
@@ -55,6 +63,7 @@ snaptext.py   入口：接线四模块，热键→选区→存盘→复制/OCR �
   ├── ui.py       选区 Selector（全屏 override-redirect 遮罩）+ grab_screen
   ├── hotkey.py   全局热键 GlobalHotkey（ctypes 直调 libX11 XGrabKey，Qt-free）
   ├── tray.py     托盘图标 TrayIcon（程序化图标，无外部资源）
+  ├── config.py   配置模板（全注释，不改=现状）+ _config.py 读取器
   ├── _vendor.py  依赖内化引导：把 vendor/ 插到 sys.path 最前
   ├── models/     三个 onnx 模型文件（随仓库打包，真正离线）
   └── vendor/     内化依赖（setup-vendor.sh 生成，不进 git）
@@ -83,16 +92,16 @@ PYTHONMALLOC=malloc python3 snaptext.py          # 严格内存检查（pymalloc
 
 见 [`AGENTS.md`](AGENTS.md)「设计哲学」一节。
 
-## 为什么不内置热键自定义 / 不提供打包发行
+## 为什么不内置配置界面 / 不提供打包发行
 
 刻意不做：**本项目是 MIT 协议，直接 fork 改代码、自己打包即可**。
 
-- 热键在 `snaptext.py` 顶部就是两个元组（`MODE_IMG` / `MODE_OCR`），改 keysym
-  和修饰键掩码即可，30 秒改完。
-- 想换图标/改落盘路径/调 OCR 行为，都是单个模块内的小改动（`ui.py` / `tray.py` /
+- 常用可调项（热键、落盘路径、OCR 参数、选区样式、是否落盘）已收敛到
+  `config.py`，改文件即可，无需碰代码。
+- 想换图标 / 加功能 / 改模块行为，是单个模块内的小改动（`ui.py` / `tray.py` /
   `ocr.py`）。
-- 不做配置文件、不做设置界面、不做打包产物——那是"给多数用户用"的软件才需要的
-  复杂度。本项目面向"愿意改代码的人"，**保持极简，把复杂度留给你 fork 后的自由**。
+- 不做设置界面、不做打包产物——那是"给多数用户用"的软件才需要的复杂度。本项目
+  面向"愿意改配置/改代码的人"，**保持极简，把复杂度留给你 fork 后的自由**。
 
 ## License
 

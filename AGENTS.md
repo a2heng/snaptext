@@ -54,7 +54,10 @@
   （2026-08-12）**：`main` 里后台线程调 `ocr._get_engine()` 提前完成模型加载
   （~0.8s），首次按键 OCR 即快；预热线程池与后续 OCR 线程共享进程级单例，无额外开销。
 - **`tray.py`**：`TrayIcon`（程序化图标无资源文件），右键退出、左键提示热键、
-  `notify(title, msg)` 非阻塞气泡。
+  `notify(title, msg)` 非阻塞气泡。热键展示文案由入口传入（跟随 config.py 改热键）。
+- **`config.py` / `_config.py`（2026-08-12）**：`config.py` 是**全注释配置模板**
+  （不改=现状）；`_config.py` 只依赖标准库，import 时 ast 解析 config.py 收集
+  白名单内顶层赋值，未覆盖项用内置默认。见「配置」节。
 
 数据流：热键(X线程) → 信号(GUI线程) → `start_select` 抓全屏 → Selector 拉框 →
 存 png → 复制图片 / QThread 后台 OCR → 存 txt → 复制文本 → 托盘气泡。
@@ -159,9 +162,30 @@
 - **竖排文本是 det 能力边界**：PP-OCR det 按连通域出框，两列竖排文字被 unclip 弥合
   成一个框（angle≈0），任何后处理都无法分行。属模型固有短板，非行合并可解。
 
+## 配置（config.py / _config.py，2026-08-12）
+
+- `config.py` 是**全注释模板**：默认状态一个赋值都没有 → 所有项回退内置默认
+  （=现状，行为与旧版本完全一致）。改配置 = 取消注释那一项示例行、改值；删行
+  = 恢复该项默认。**启动时读一次，改配置需重启**。
+- `_config.py` 只依赖标准库。import 时 `ast.parse` 用户文件 + `literal_eval`
+  收集顶层 `名 = 值`，只在 `DEFAULTS` 白名单内的名字才生效；拼错名/类型错/
+  值非法 → 该项**静默回退默认**并 stderr 警示，不影响其它项。
+- **bool 校验用 `type(v) is bool`**：bool 是 int 子类，`isinstance(True, int)`
+  会误把 `SAVE_IMAGES = 1` 放行；int 项也要用 `type(v) is int` 挡掉布尔。
+- 热键写法 `修饰键+修饰键+键名`：shift/ctrl/alt/super 可组合（OR），键名=X11
+  keysym；`parse_hotkey()` 解析成 `(keysym, mods)`、`hotkey_display()` 生成托盘
+  展示文案。CapsLock/NumLock 由 hotkey.py 的 lock 变体自动兼容，不额外注册。
+- `SAVE_IMAGES=False`：图片不落盘、OCR 走内存——`_on_selected` 不再存 png，
+  `OcrWorker` 第二参吃 **str 路径或 QPixmap 二选一**（snaptext 的
+  `_qpixmap_to_bgr` 把 QPixmap 转 BGR ndarray，`ascontiguousarray` 拷贝脱离
+  QImage 生命周期，防悬空）。此时 data 目录不自动创建、txt 也不落盘，结果只进
+  剪贴板。
+- 配置项清单以 config.py 注释为准；新增配置项 = `DEFAULTS` + `_VALIDATORS`
+  各加一条，`get(name)` 取用。
+
 ## 落盘与流程
 
 - 截图 `grabWindow(0)` 抓全屏 → `Selector` 全屏半透明拉框 overlay（覆盖系统面板）。
 - 落盘 `~/.snaptext/img/`（png）、`~/.snaptext/text/`（txt），文件名
-  `YYYYMMDD_HHMMSS_XXX`。
+  `YYYYMMDD_HHMMSS_XXX`。数据目录/热键/OCR 参数/行为等均可在 config.py 调整。
 - OCR 结果 `\n` 拼接，成功自动复制剪贴板；反馈走托盘非阻塞气泡（无弹窗）。
