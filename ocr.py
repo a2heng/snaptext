@@ -1,51 +1,60 @@
 # -*- coding: utf-8 -*-
 """独立 OCR 模块：图片 → 文本（本地 onnx，Qt-free）。
 
-仅依赖标准库 + numpy + cv2 + rapidocr_onnxruntime。
-模型在 rapidocr wheel 内本地加载，不联网；模块内复用单个 RapidOCR 实例。
+仅依赖标准库 + numpy + cv2 + rapidocr（新版统一包，旧 rapidocr_onnxruntime
+已停更）。模型在项目 models/ 内本地加载，不联网；模块内复用单个 RapidOCR 实例。
 """
 
 import sys
 from pathlib import Path
 
-import _config
-import _vendor
+import _bootstrap
 
-_vendor.activate()
+_bootstrap.activate()
+
+import _config
 
 import cv2
-from rapidocr_onnxruntime import RapidOCR
+from rapidocr import OCRVersion, RapidOCR
 
 _engine = None
 
-# 模型随项目打包（models/，仓库内），真正离线、不依赖 wheel 内置模型
+# 模型随项目打包（models/，仓库内），真正离线、不依赖 wheel 内置模型。
+# PP-OCRv5（2026-08-12 升级：行合并更完整、字符识别更准，见 AGENTS.md）。
+# 新版 rapidocr 用 params（"段.键" 形式）指定模型路径，走 model_path 即不下载。
 _MODELS = {
-    "det": Path(__file__).resolve().parent / "models" / "ch_PP-OCRv3_det_infer.onnx",
-    "rec": Path(__file__).resolve().parent / "models" / "ch_PP-OCRv3_rec_infer.onnx",
-    "cls": Path(__file__).resolve().parent / "models" / "ch_ppocr_mobile_v2.0_cls_infer.onnx",
+    "det": Path(__file__).resolve().parent / "models" / "PP-OCRv6_det_small.onnx",
+    "rec": Path(__file__).resolve().parent / "models" / "PP-OCRv6_rec_small.onnx",
+    "cls": Path(__file__).resolve().parent / "models" / "ch_PP-LCNet_x0_25_textline_ori_cls_mobile.onnx",
 }
 
 
 def _get_engine() -> RapidOCR:
-    """惰性获取全局唯一 RapidOCR 实例（首次调用才加载模型）。"""
+    """惰性获取全局唯一 RapidOCR 实例（首次调用才加载模型）。
+
+    新版 rapidocr 3.x 参数形式是 "{段}.{键}"（段 ∈ Global/Det/Cls/Rec/EngineConfig）：
+    - 模型路径：Det/Cls/Rec.model_path 指定即离线加载，不触发下载。
+    - 坑1（宽高比跳过 det）：新 API 已改为 apply_vertical_padding 处理窄条；
+      Global.width_height_ratio 保留但语义变"加垂直 padding 的触发阈值"。
+    - 坑2（扁图放大爆炸）：Det.limit_type='max' + limit_side_len=960 语义不变
+      （长边封顶 960、32 对齐），4K/窄条都不会全尺寸推理。
+    """
     global _engine
     if _engine is None:
-        _engine = RapidOCR(
-            det_model_path=str(_MODELS["det"]),
-            rec_model_path=str(_MODELS["rec"]),
-            cls_model_path=str(_MODELS["cls"]),
-            # 坑1：RapidOCR 对宽高比 > width_height_ratio 的图会跳过 det、整图直喂 rec，
-            # 极窄条（如 106x1090）因此识别为空。该参数是 Global 级（无前缀），
-            # 调大让窄条也走 det。
-            width_height_ratio=_config.get("OCR_WIDTH_HEIGHT_RATIO"),
-            # 坑2：det 默认 limit_type='min'（短边拉到 736）——扁图（694x50）被
-            # 放大成 10200x736 的巨大输入，OCR 要 3-4 秒；4K 全屏 3840x2160 也
-            # 全尺寸推理很慢。改 limit_type='max' + limit_side_len=960（长边
-            # 封顶 960，32 对齐）后所有尺寸降到 ~0.6-1s，实测准确率无退化。
-            # 这两个是 Det 段参数（带 det_ 前缀，UpdateParameters 会剥前缀映射）。
-            det_limit_type=_config.get("OCR_DET_LIMIT_TYPE"),
-            det_limit_side_len=_config.get("OCR_DET_LIMIT_SIDE_LEN"),
-        )
+        _engine = RapidOCR(params={
+            "Det.model_path": str(_MODELS["det"]),
+            "Rec.model_path": str(_MODELS["rec"]),
+            "Cls.model_path": str(_MODELS["cls"]),
+            # PP-OCRv6 det/rec + v5 的 LCNet 方向分类器（v6 复用 v5 的 cls，
+            # 输入 [3,80,160]；设 Cls.ocr_version=v5 匹配形状，否则默认 v4 用
+            # [3,48,192] 维度不匹配报错）。
+            "Det.ocr_version": OCRVersion.PPOCRV6,
+            "Rec.ocr_version": OCRVersion.PPOCRV6,
+            "Cls.ocr_version": OCRVersion.PPOCRV5,
+            "Global.width_height_ratio": _config.get("OCR_WIDTH_HEIGHT_RATIO"),
+            "Det.limit_type": _config.get("OCR_DET_LIMIT_TYPE"),
+            "Det.limit_side_len": _config.get("OCR_DET_LIMIT_SIDE_LEN"),
+        })
     return _engine
 
 
@@ -123,15 +132,29 @@ class OcrEngine:
             out.append(" ".join(c[4] for c in ln))
         return "\n".join(out)
 
+    @staticmethod
+    def _to_results(res) -> list:
+        """新版 RapidOCROutput → 旧的 [(box, text, score), ...] 列表。
+
+        新 API 空结果返回 RapidOCROutput()（boxes/txts/scores 均 None），
+        有结果时 boxes 是 (N,4,2) ndarray、txts/scores 是等长 tuple。
+        """
+        if res is None or res.boxes is None or res.txts is None:
+            return []
+        return [
+            (box, text, score)
+            for box, text, score in zip(res.boxes, res.txts, res.scores)
+        ]
+
     def recognize(self, img) -> str:
         """img 为 BGR ndarray（cv2 约定），返回每行文本用 \\n 拼接；无文本返回空串。"""
         if img is None:
             raise RuntimeError("图片为空（None）")
         try:
-            res, _ = _get_engine()(img)
+            res = _get_engine()(img)
         except Exception as e:
             raise RuntimeError(f"OCR 识别失败: {e}") from e
-        return self._merge_to_lines(res)
+        return self._merge_to_lines(self._to_results(res))
 
     def recognize_path(self, path: str) -> str:
         """读图片文件 → 文本；文件不存在/打不开/引擎异常均抛 RuntimeError。"""
