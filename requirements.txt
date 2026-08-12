@@ -1,0 +1,12 @@
+# 拾字 SnapText 开发依赖（全局或 venv 安装）
+#
+# 只列"直接依赖"；rapidocr 会自动拉齐它的全部传递依赖
+# （pyclipper/opencv/numpy/shapely/pyyaml/pillow/six/tqdm/omegaconf/requests/colorlog），
+# 无需在此重复。onnxruntime 是推理引擎（rapidocr 不自动带，须显式装），
+# numpy<3 是 rapidocr 的版本约束（numpy3 不兼容）。
+#
+# 安装：python3 -m pip install -r requirements.txt  后直接 `python3 snaptext.py`
+rapidocr>=3.9
+onnxruntime
+PySide6
+numpy<3

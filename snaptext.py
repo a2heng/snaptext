@@ -20,10 +20,6 @@ import sys
 import threading
 import time
 
-import _vendor
-
-_vendor.activate()
-
 import _config as cfg
 
 from PySide6.QtCore import QObject, QRect, QThread, Qt, Signal
