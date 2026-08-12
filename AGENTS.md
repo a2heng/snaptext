@@ -7,11 +7,15 @@
 ## 运行与依赖
 
 - 运行：`python3 snaptext.py`（需 X11 `DISPLAY`，本机 `:0`）。**单实例**：再开被拦截。
-- **全部依赖装系统 Python 3.14.6 用户 site-packages（`~/.local/...`），不用 venv**
-  （符合 `/home/aheng/AGENTS.md` 的机器策略）。已装：PySide6 6.11.1、
-  rapidocr-onnxruntime 1.2.3、onnxruntime 1.28.0、opencv-python 5.0.0.93、numpy 2.4.1。
-- 装新依赖走 `pip3 install --user --break-system-packages`，默认走 NJU PyPI 镜像
-  （`/etc/pip.conf`）。
+- **依赖内化进项目 `vendor/`**（类似"项目内 venv"，**不进 git**，`.gitignore` 已排除）：
+  克隆后首次联网跑 `./setup-vendor.sh`（默认装 OCR 链 + PySide6），之后完全离线、
+  无需任何 `pip install`。追加包：`./setup-vendor.sh <包名>…`。
+- `ocr.py` / `snaptext.py` 顶部 `import _vendor; _vendor.activate()` 把 `vendor/`
+  插到 `sys.path[0]`，优先加载项目内置依赖。**新 py 模块 import 第三方库前必须先
+  activate**（参考 ocr.py 的写法）。
+- 依赖走 NJU PyPI 镜像（`/etc/pip.conf`）。本机 vendor 已生成（PySide6 6.11.1、
+  rapidocr-onnxruntime 1.2.3、onnxruntime 1.28.0、opencv-python 5.0.0.93、
+  numpy 2.5.2 等，约 1GB）。
 
 ## 模型（本地 onnx，随仓库打包）
 
@@ -44,7 +48,11 @@
   跑在 X 轮询线程，经 `hotkey_pressed` 信号 queued 到 GUI 线程。`OcrWorker` 复用
   已保存的 png 喂 `OcrEngine`，QThread 后台跑。**托盘模式，MainWin 不 show**；
   `setQuitOnLastWindowClosed(False)`（选区遮罩关闭不误退）；单实例锁
-  `acquire_single_instance()`。
+  `acquire_single_instance()`。**忙时热键入队（2026-08-12）**：选区/OCR 进行中再按
+  热键不再丢弃，FIFO 排队（`_pending`），当前任务收尾（`_finish_cancel`/img 完成/
+  `_on_ocr_done`）统一走 `_start_next_or_idle()` 自动执行下一个。**启动预热 onnx
+  （2026-08-12）**：`main` 里后台线程调 `ocr._get_engine()` 提前完成模型加载
+  （~0.8s），首次按键 OCR 即快；预热线程池与后续 OCR 线程共享进程级单例，无额外开销。
 - **`tray.py`**：`TrayIcon`（程序化图标无资源文件），右键退出、左键提示热键、
   `notify(title, msg)` 非阻塞气泡。
 
@@ -91,6 +99,20 @@
 - 轮询线程与主线程并发访问同一 Display，模块加载时先调 `XInitThreads()`。
 - `release()` 必须 join 轮询线程、持有 error handler 回调引用，否则解释器收尾 GC
   崩溃。
+- **NumLock/CapsLock 开启时被动 grab 匹配不上 → 热键静默失效（2026-08-12 根因）**：
+  XGrabKey 只精确匹配注册的 modifiers 组合，**X server 不会自动为被动 grab 注册
+  lock 变体**。本机 NumLock 常开，按 Alt+X 实际 state=0x18（Mod1+Mod2），而只注册
+  mods=8 的 grab 匹配不上 → 热键完全失效。修法：`_lock_variants(mods)` 显式注册全部
+  4 个变体（mods / mods|Caps / mods|NumLock / mods|Caps|NumLock），事件侧用
+  `state & ~(LOCK|MOD2) == mods` 过滤兼容任意 lock 状态。排查时曾误判"被动 grab 全部
+  失效"，实际是注册的 lock 变体不全。
+- **KeyRelease 重新武装不能按 mods 过滤（2026-08-12）**：按住触发后需等 KeyRelease
+  重新 arm。若 KeyRelease 也要求 `state & ~(LOCK|MOD2) == mods`，**先松 Alt 再松 X
+  时 KeyRelease(X) 到达已无 Mod1（state=0），永远 re-arm 失败 → 热键只触发一次就
+  永久失效**。修法：KeyRelease 只凭 keycode 重新 arm，不检查 state。
+- **防抖（2026-08-12）**：按住热键时 X11 auto-repeat 连续发 KeyPress，每个都触发
+  回调 → 一次长按触发几十次截图/OCR，线程堆积（实测 175 线程、CPU 766%）。修法：
+  `_armed` 标志，KeyPress 触发后置 False，KeyRelease 才重新 arm，一次按键只触发一次。
 
 ## PySide6 / 高分屏踩过的坑（已修，别回退）
 
@@ -108,6 +130,34 @@
 - **override-redirect 窗口收不到键盘**：Esc 用临时全局热键兜底。
 - **单实例锁**：多开实例抢同一 XGrabKey，热键随机失效。锁在数据目录外
   （`~/.snaptext.lock`），flock + 固定 UUID token（`<uuid>_SnapText`）+ PID 存活校验。
+
+## OCR 踩过的坑（ocr.py 已修，改它时勿回退）
+
+- **RapidOCR 对宽高比极大的图会跳过 det、直接整图喂 rec** → 识别为空。源码：
+  `rapid_ocr_api.py` 里 `use_limit_ratio = w / h > self.width_height_ratio`
+  （默认 `width_height_ratio: 8`，Global 级参数），为 True 时走
+  `get_boxes_img_without_det`（整图当一块）。实测 106×1090 窄条（比值 10.3）因此
+  返回空，但单独调 det 能出 23 个框。**修复：`RapidOCR(..., width_height_ratio=100)`**
+  （注意是 **Global 级无前缀**，带 `det_` 前缀不会生效——UpdateParameters 把
+  `det_` 前缀剥掉后映射到 Det 段，而 `width_height_ratio` 在 Global 段，静默无效）。
+- det 出的裁剪块高 17-42px 的小字块 rec 仍能识别（0.68-0.92 分），只要走 det 就没问题。
+- **行合并 `_merge_to_lines`（旋转稳健）**：det 按连通域出框，一行内有大间隙（标签页/
+  菜单项等）会切成多个词块框 → 逐框输出"换行过频"。修复：用 `minAreaRect` 求每框
+  方向角（归一到 (-90,90]，`angle%180` 后 `>90` 减 180 处理 179.5→-0.5 的环绕），
+  取中位数为文本方向；把框 4 点投影到"文本方向/法线"轴，沿法线按"重叠比例>0.6
+  （基准取两框中较矮者）"聚类成行，同行内沿文本方向排序空格连接。**判据要点**：紧挨
+  的两行文字法线区间可能搭界 2px，但重叠比例极低（行高 27/44 时仅 7%），不会误连；
+  而同一行框重叠比例 90%+。旋转/倾斜文本投影到同一法线上仍同属一行，天然稳健。
+- **det 默认短边拉 736 → 扁图推理爆炸（2026-08-12 性能根因）**：det 的
+  `DetResizeForTest.resize_image_type0` 默认 `limit_type='min'`（短边拉到 736），
+  694×50 扁图被放大成 10200×736 巨图，OCR 要 3-4 秒（越扁越慢）；4K 全屏
+  3840×2160 也全尺寸推理。**修复：`RapidOCR(..., det_limit_type='max',
+  det_limit_side_len=960)`**（Det 段参数，带 `det_` 前缀）。改后 694×50 → 0.5s、
+  4K → 0.95s，实测准确率无退化。
+- **白边方案无效**：给窄条上下/四周加白边后 det 反而出更多碎片（20-22 框）且产生
+  跨行错合并（如"软件介绍／windows"）。别用加白边解决换行过频。
+- **竖排文本是 det 能力边界**：PP-OCR det 按连通域出框，两列竖排文字被 unclip 弥合
+  成一个框（angle≈0），任何后处理都无法分行。属模型固有短板，非行合并可解。
 
 ## 落盘与流程
 

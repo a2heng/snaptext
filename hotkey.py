@@ -100,11 +100,26 @@ def _x_grab_ok(d, keycode, mods, root) -> bool:
     try:
         _LIBX.XSync(d, 0)      # 先排空连接上旧的 pending 错误
         del err_flag[:]
-        _LIBX.XGrabKey(d, keycode, mods, root, True, 1, 1)
+        for m in _lock_variants(mods):
+            _LIBX.XGrabKey(d, keycode, m, root, True, 1, 1)
         _LIBX.XSync(d, 0)      # 同步等待 grab 结果
         return not err_flag
     finally:
         _LIBX.XSetErrorHandler(old)
+
+
+def _lock_variants(mods: int) -> list:
+    """XGrabKey 的被动 grab 只精确匹配注册的 modifiers 组合。
+
+    坑（本机实测）：NumLock/CapsLock 开启时，按键事件的 state 会带上
+    MOD2/LOCK 位。X server 默认不会自动为被动 grab 注册 lock 变体——
+    只注册 mods 本身的话，NumLock 开时按 Alt+X（state=0x18）永远匹配不上
+    mods=8（Alt）的 grab，热键静默失效。因此需显式注册全部 4 个 lock
+    变体：mods、mods|CapsLock、mods|NumLock、mods|CapsLock|NumLock。
+    事件侧 _loop 里用 `state & ~(LOCK|MOD2) == mods` 过滤，忽略 lock 位，
+    兼容任意 CapsLock/NumLock 状态。
+    """
+    return sorted({mods, mods | 2, mods | 16, mods | 18})
 
 
 class GlobalHotkey:
@@ -115,6 +130,7 @@ class GlobalHotkey:
     """
 
     KeyPress = 2
+    KeyRelease = 3
     LOCK = 2    # CapsLock
     MOD2 = 16   # NumLock
 
@@ -123,6 +139,7 @@ class GlobalHotkey:
         self._mods = mods
         self._on_press = on_press
         self._run = True
+        self._armed = True
         self._d = _LIBX.XOpenDisplay(None)
         self._ok = bool(self._d)
         self._keycode = 0
@@ -149,10 +166,19 @@ class GlobalHotkey:
             if _LIBX.XPending(self._d):
                 ev = XEventBuf()
                 _LIBX.XNextEvent(self._d, ctypes.byref(ev))
-                if ev.xkey.type == self.KeyPress and ev.xkey.keycode == self._keycode:
-                    # 只认"指定 mods"，忽略 NumLock/CapsLock 状态
-                    if (ev.xkey.state & ~(self.LOCK | self.MOD2)) == self._mods:
-                        self._on_press()
+                if ev.xkey.keycode == self._keycode:
+                    if ev.xkey.type == self.KeyRelease:
+                        # 只凭 keycode 重新武装，不检查 state：若先松 Alt 再松 X，
+                        # KeyRelease(X) 到达时 Alt 已释放（state=0），按 mods 过滤
+                        # 会永远 re-arm 失败，热键只触发一次就永久失效
+                        self._armed = True
+                    elif ev.xkey.type == self.KeyPress and self._armed:
+                        # 只认"指定 mods"，忽略 NumLock/CapsLock 状态
+                        if (ev.xkey.state & ~(self.LOCK | self.MOD2)) == self._mods:
+                            # 防抖：按住时 X11 auto-repeat 会连续发 KeyPress，
+                            # 一次按键只触发一次，直到该键释放才重新 arm
+                            self._armed = False
+                            self._on_press()
                 del ev  # 避免帧残留事件缓冲，杜绝收尾 GC 时其 dealloc 崩溃
             else:
                 time.sleep(0.02)
@@ -166,5 +192,6 @@ class GlobalHotkey:
             self._th.join(timeout=1.0)
             self._th = None
         if self._d:
-            _LIBX.XUngrabKey(self._d, self._keycode, self._mods, self._root)
+            for m in _lock_variants(self._mods):
+                _LIBX.XUngrabKey(self._d, self._keycode, m, self._root)
             _LIBX.XFlush(self._d)

@@ -17,7 +17,12 @@
 """
 import os
 import sys
+import threading
 import time
+
+import _vendor
+
+_vendor.activate()
 
 from PySide6.QtCore import QObject, QRect, QThread, Qt, Signal
 from PySide6.QtGui import QGuiApplication
@@ -37,6 +42,19 @@ LOCK_PATH = os.path.expanduser("~/.snaptext.lock")
 # (keysym, modifiers, mode)
 MODE_IMG = ("x", 8, "img")   # Alt+X：截图+存图+复制图片
 MODE_OCR = ("c", 8, "ocr")   # Alt+C：截图+存图+OCR+复制文字
+
+
+def _prewarm_engine():
+    """后台预热 onnx 模型（模型加载/session 创建约 0.8s，首次 OCR 前做完）。
+
+    只触发 OcrEngine 的惰性单例初始化（_get_engine 建全局唯一 RapidOCR），
+    不跑真实推理；预热线程与后续 OCR 线程无共享可变状态，安全。
+    """
+    try:
+        from ocr import _get_engine
+        _get_engine()
+    except Exception:
+        pass  # 预热失败不致命，首次 OCR 时正常加载
 
 _lock_fd = None
 
@@ -129,6 +147,7 @@ class MainWin(QWidget):
     def __init__(self):
         super().__init__(None)
         self._busy = False
+        self._pending = []      # 忙时排队的热键模式（FIFO，不丢不并发）
         self._sel = None
         self._tray = None
         self._esc = None
@@ -147,10 +166,25 @@ class MainWin(QWidget):
             hk = GlobalHotkey(key, mods, lambda m=mode: self.hotkey_pressed.emit(m))
             if hk.ok:
                 self._hotkeys.append(hk)
+        # 启动即后台预热 onnx 模型：模型加载约 0.8s（含 session 创建），
+        # 放后台线程提前做完，首次按键不用等。OcrEngine._get_engine 是惰性
+        # 单例，线程安全无锁但重复调用无害（首次真的建，后续直接拿引用）。
+        threading.Thread(target=_prewarm_engine, daemon=True).start()
+
+    def _start_next_or_idle(self):
+        """当前任务收尾后调用：忙队里还有就继续下一个，没有则空闲。"""
+        if self._pending:
+            self._begin_select(self._pending.pop(0))
+        else:
+            self._busy = False
 
     def start_select(self, mode):
         if self._busy:
+            self._pending.append(mode)   # 忙时入队，完成后自动执行
             return
+        self._begin_select(mode)
+
+    def _begin_select(self, mode):
         self._busy = True
         self._mode = mode
         self.hide()
@@ -174,7 +208,7 @@ class MainWin(QWidget):
         if self._sel is not None:
             self._sel.close()
         self._sel = None
-        self._busy = False
+        self._start_next_or_idle()
 
     def _on_selected(self, r):
         src = self._sel._pix
@@ -195,8 +229,8 @@ class MainWin(QWidget):
         pix.save(img_path, "PNG")
         if self._mode == "img":
             QGuiApplication.clipboard().setPixmap(pix)
-            self._busy = False
             self._notify("已保存并复制图片", ts + ".png")
+            self._start_next_or_idle()
         else:
             self._run_ocr(img_path, os.path.join(TXT_DIR, ts + ".txt"))
 
@@ -222,7 +256,7 @@ class MainWin(QWidget):
         th.start()
 
     def _on_ocr_done(self, text):
-        self._busy = False
+        self._start_next_or_idle()
         if text and not text.startswith("["):
             QGuiApplication.clipboard().setText(text)
             preview = text.replace("\n", " ")
