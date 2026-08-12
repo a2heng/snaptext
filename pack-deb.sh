@@ -18,8 +18,11 @@
 #   colorlog：rapidocr 的 log.py 仅用于日志着色，打包时替换为标准库 logging，
 #     免去 colorlog 依赖（注意：源码运行仍需 rapidocr 自带 colorlog，此处仅产物替换）。
 #
-# 版本号解析：tag 触发 CI 时取自 GITHUB_REF_NAME（v2026.08.12.1517 → 2026.08.12.1517），
+# 版本号解析：tag 触发 CI 时取自 GITHUB_REF_NAME（v2026.08.13.1505 → 2026.08.13.1505），
 # 保证 deb 与 tag 名一致；本地/手动跑回退当前时间。
+#
+# tag 命名约定见 AGENTS.md「deb 打包」节：必须手动打成 `vYYYY.MM.DD.HHMM`（10 位，
+# 含分钟），如 v2026.08.13.1505（= 2026-08-13 15:05，下午 3 点 5 分）。
 
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -58,13 +61,14 @@ done
 cp -r models "$ROOT/opt/snaptext/"
 
 echo "==> 拷贝静态图标（icons/ 随仓库提交，无需生成）"
-# 多尺寸 PNG → hicolor 主题；snaptext.ico → /opt/snaptext
+# 多尺寸 PNG → hicolor 主题；snaptext.ico + icons/ → /opt/snaptext（托盘加载用）
 for s in 16 24 32 48 64 128 256; do
     d="$ROOT/usr/share/icons/hicolor/${s}x${s}/apps"
     mkdir -p "$d"
     cp "icons/snaptext-$s.png" "$d/snaptext.png"
 done
 cp icons/snaptext.ico "$ROOT/opt/snaptext/"
+cp -r icons "$ROOT/opt/snaptext/"
 
 # ---- 剥离无系统包依赖到 lib/ ----
 # rapidocr 内置 28MB 模型弃用（项目用自带模型）；colorlog 用 logging 替换；

@@ -1,53 +1,22 @@
 """拾字 SnapText —— 独立托盘模块（常驻托盘图标替代小窗口）。
 
 只含 Qt/UI：QSystemTrayIcon + 右键菜单（退出）。热键/OCR 逻辑不掺进来。
+图标加载自项目内置资源 `icons/`（随仓库提交，不运行时生成）。
 """
-from PySide6.QtCore import Qt
-from PySide6.QtGui import (
-    QColor,
-    QFont,
-    QFontDatabase,
-    QIcon,
-    QPainter,
-    QPixmap,
-)
+from pathlib import Path
+
+from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
 APP_NAME = "拾字 SnapText"
 
-# 与 make-icons.py 保持一致：宋体 Black、字号占边长 0.55，托盘/deb 图标同款。
-_BG = QColor("#2b5f9c")
-_FG = QColor("#ffffff")
-_CHAR = "拾"
-_FONT_PATH = "/usr/share/fonts/TTF/NotoSerifCJK-Black.ttc"
-_FONT_PT_RATIO = 0.55
-_font_family = None
-
-
-def _char_font(size: int) -> QFont:
-    global _font_family
-    if _font_family is None:
-        fid = QFontDatabase.addApplicationFont(_FONT_PATH)
-        _font_family = QFontDatabase.applicationFontFamilies(fid)[0]
-    f = QFont(_font_family)
-    f.setPointSizeF(size * _FONT_PT_RATIO)
-    return f
+# 托盘图标：直接加载已提交的静态资源（icons/snaptext-64.png），不运行时生成。
+_ICON_PATH = Path(__file__).resolve().parent / "icons" / "snaptext-64.png"
 
 
 def make_icon() -> QIcon:
-    """程序化生成托盘图标（蓝底圆角方块 + 白"拾"字），无外部资源文件。"""
-    pm = QPixmap(64, 64)
-    pm.fill(Qt.transparent)
-    p = QPainter(pm)
-    p.setRenderHint(QPainter.Antialiasing)
-    p.setBrush(_BG)
-    p.setPen(Qt.NoPen)
-    p.drawRoundedRect(0, 0, 64, 64, 7, 7)
-    p.setPen(_FG)
-    p.setFont(_char_font(64))
-    p.drawText(pm.rect(), Qt.AlignCenter, _CHAR)
-    p.end()
-    return QIcon(pm)
+    """从静态资源加载托盘图标（若缺失退回空图标，不崩溃）。"""
+    return QIcon(str(_ICON_PATH))
 
 
 class TrayIcon(QSystemTrayIcon):

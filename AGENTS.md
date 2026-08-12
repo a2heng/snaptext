@@ -11,9 +11,13 @@
 - **依赖走系统/全局 site-packages，无 vendor、无项目内 venv**：
   `python3 -m pip install -r requirements.txt` 装一次即可（PySide6 + OCR 链）。
   `requirements.txt` 用新版 unified `rapidocr`（3.x，旧 rapidocr-onnxruntime 停更）。
-- `_bootstrap.py`：deb 产物里把项目内置 `lib/`（无系统包的 rapidocr/shapely/
-  pyclipper/omegaconf/antlr4）插到 `sys.path`；源码直跑时 `lib/` 不存在 = 空操作，
+- `_bootstrap.py`：deb 产物里把项目内置 `lib/`（无系统包的 rapidocr/pyclipper/
+  omegaconf/antlr4）插到 `sys.path`；源码直跑时 `lib/` 不存在 = 空操作，
   走系统包。`ocr.py` / `snaptext.py` 顶部 `import _bootstrap; _bootstrap.activate()`。
+- **依赖清单原则**：`requirements.txt` **只列直接依赖**（rapidocr/onnxruntime/
+  PySide6/numpy<3）。rapidocr 会自动拉齐全部传递依赖（pyclipper/opencv/numpy/
+  shapely/pyyaml/pillow/six/tqdm/omegaconf/requests/colorlog），**不要逐个列出**；
+  onnxruntime 是推理引擎（rapidocr 不自动带）须显式装。numpy<3 是 rapidocr 约束。
 
 ## 模型（本地 onnx，随仓库打包）
 
@@ -57,11 +61,15 @@
   `_on_ocr_done`）统一走 `_start_next_or_idle()` 自动执行下一个。**启动预热 onnx
   （2026-08-12）**：`main` 里后台线程调 `ocr._get_engine()` 提前完成模型加载
   （~0.8s），首次按键 OCR 即快；预热线程池与后续 OCR 线程共享进程级单例，无额外开销。
-- **`tray.py`**：`TrayIcon`（程序化图标无资源文件），右键退出、左键提示热键、
-  `notify(title, msg)` 非阻塞气泡。热键展示文案由入口传入（跟随 config.py 改热键）。
+- **`tray.py`**：`TrayIcon`（图标加载静态资源 `icons/snaptext-64.png`，与 deb
+  同款），右键退出、左键提示热键、`notify(title, msg)` 非阻塞气泡。热键展示文案
+  由入口传入（跟随 config.py 改热键）。
 - **`config.py` / `_config.py`（2026-08-12）**：`config.py` 是**全注释配置模板**
   （不改=现状）；`_config.py` 只依赖标准库，import 时 ast 解析 config.py 收集
   白名单内顶层赋值，未覆盖项用内置默认。见「配置」节。
+- **`_bootstrap.py`**：deb 产物依赖引导（把 `lib/` 插到 sys.path，源码直跑=空操作）。
+- **`make-icons.py`**：程序化生成 `icons/`（png 多尺寸 + ico，宋体 Black 拾字），
+  产物随仓库提交，**CI 不生成**（见「deb 打包」节）。
 
 数据流：热键(X线程) → 信号(GUI线程) → `start_select` 抓全屏 → Selector 拉框 →
 存 png → 复制图片 / QThread 后台 OCR → 存 txt → 复制文本 → 托盘气泡。
@@ -89,6 +97,11 @@
   带 sleep 才稳定）。
 - **踩坑即沉淀**：每修一个非显而易见的问题，把结论写进 AGENTS.md（本文件即"踩坑
   日志"），同时作为 git commit message。
+- **更新即沉淀（2026-08-13 补）**：不只踩坑要记，**任何非平凡的改动/决策/演进都
+  要同步写进 AGENTS.md**——包括依赖变更、打包方案选择、模型版本取舍、目录/接口
+  增删、需求来回（试过又放弃的方案）。原则：**改了什么，AGENTS.md 就要跟着对得上**，
+  否则下次别人（或你自己）读文档会以为代码还是旧行为。改完顺手 `git diff` 对照，
+  确认文档描述与代码一致。
 - **清理测试残留**：`pkill -9 -f 'snaptext[.]py'`（用 `[.]` 转义避免 pkill 匹配到
   自身命令；注意别在命令里再写裸 `snaptext.py` 字样）。
 - **单实例测试**：`~/.snaptext.lock` 持锁为唯一实例；清数据目录（`~/.snaptext`）
@@ -202,12 +215,25 @@
   打包 shapely（省 ~10MB，目标机也无需系统 shapely）。改 rapidocr 版本时需重验此 patch。
 - **colorlog 处理**：rapidocr 的 log.py 仅用于日志着色，打包时替换为标准库 logging
   （完整重写，非 sed 补丁——只注释 import 会留 `colorlog.ColoredFormatter` 报错）。
-- **图标静态化（2026-08-12）**：`icons/`（png 多尺寸 + ico，托盘同款宋体 Black）
-  随仓库提交，打包时直接拷贝，**CI 不生成图标**（少一个故障点）。需重画时跑
-  `QT_QPA_PLATFORM=offscreen python3 make-icons.py` 并提交新 icons/。
-- **Depends 按发行版选包名**：`SNAPTEXT_DEPS` 环境变量覆盖，否则读 `/etc/os-release`
-  的 ID 选 AOSC（无 python3- 前缀）或 Debian 系（python3-*）命名。
-- 版本号：tag 触发 CI 时取 `GITHUB_REF_NAME`（去 v），本地跑回退当前时间。
+- **图标静态化（2026-08-12）**：`icons/`（png 多尺寸 + ico，蓝底圆角 + 宋体 Black
+  "拾"字）随仓库提交，打包时直接拷贝，**CI 不生成图标**（少一个故障点）。
+  **托盘也加载静态资源**（tray.py 读 `icons/snaptext-64.png`，不运行时绘制）。
+  需重画时跑 `QT_QPA_PLATFORM=offscreen python3 make-icons.py` 并提交新 icons/。
+  样式参数（圆角/字号/垂直偏移/超采样）见 make-icons.py 顶部常量。
+- **Depends 跨发行版 OR 兼容（2026-08-13）**：同一依赖不同发行版包名不同——
+  AOSC 无 `python3-` 前缀（pyside6/opencv/numpy...），Debian/Ubuntu 是
+  `python3-*` 拆分名。用 deb 的 OR 关系 `a | b`（每项满足其一即可）让一个 deb
+  同时被 AOSC 与 Debian/Ubuntu 识别，避免"ubuntu 构建的 deb 装到 AOSC 报依赖
+  未满足"。例：`pyside6 | python3-pyside6.qtgui`。`SNAPTEXT_DEPS` 仍可完全覆盖。
+- **打包方案演进（2026-08-12→13，别回退）**：最初试过官方 PyInstaller 全自包含
+  deb，但 onedir 实测 ~350-511MB（含 PySide6/opencv/onnxruntime 全部依赖），
+  太大放弃。改用**最小 deb**（源码+models+无系统包依赖，~27MB），PySide6 等走
+  系统包。开发也放弃 vendor 内化，改系统/全局依赖。**原则：产物体积优先于自包含**。
+- **tag 命名准则（2026-08-13）**：tag 触发 CI 时版本取 `GITHUB_REF_NAME`（去 `v`），
+  本地跑回退当前时间。**tag 必须手动打成 `vYYYY.MM.DD.HHMM`（10 位、含分钟）**，
+  例：`v2026.08.13.1505` = 2026-08-13 **15:05（下午 3 点 5 分）**。HHMM 是 24 小时制，
+  用 15xx/2xxx 这种无歧义时刻举例，避免 `0021` 被误读为"凌晨 00:21"。
+  不要打缺分钟的 tag（如 `v2026.08.13.1`）——会发布出无分钟的错误版本号。
 - **模型文件名必须保留官方原名**（PP-OCRv6_det_small.onnx / PP-OCRv6_rec_small.onnx /
   ch_PP-LCNet_x0_25_textline_ori_cls_mobile.onnx），勿自定义改名。
 

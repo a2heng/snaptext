@@ -28,8 +28,15 @@ FG = QColor("#ffffff")
 CHAR = "拾"
 # 宋体 Black：笔画厚重、有书法感，小尺寸下也清晰，图标文字辨识度高。
 FONT_PATH = "/usr/share/fonts/TTF/NotoSerifCJK-Black.ttc"
-# 字号占边长的比例：比托盘默认更大（0.40→0.55），文字更饱满醒目。
-FONT_PT_RATIO = 0.55
+# 圆角占边长比例：0.18 更圆润，看着更柔和。
+CORNER_RATIO = 0.18
+# 字号占边长的比例：0.60，四周留白充足不顶边。
+FONT_PT_RATIO = 0.60
+# 超采样倍数：在 4 倍分辨率画布上画大字，再平滑缩到目标尺寸，
+# 既保持大字的视觉占比，又让边缘因超采样更干净锐利（抗锯齿）。
+SS_FACTOR = 4
+# 文字垂直偏移（占边长比例）：正值上移，校正视觉中心略微靠下的感觉。
+V_OFFSET_RATIO = 0.05
 OUT_DIR = Path(__file__).resolve().parent / "icons"
 
 # 缓存字体族名（运行时静态字体，仅打包/托盘加载一次）
@@ -47,18 +54,25 @@ def _char_font(size: int) -> QFont:
 
 
 def draw(size: int) -> QPixmap:
-    pm = QPixmap(size, size)
+    """超采样渲染：高分辨率画大字 → 平滑缩到目标尺寸。"""
+    ss = size * SS_FACTOR
+    pm = QPixmap(ss, ss)
     pm.fill(Qt.transparent)
     p = QPainter(pm)
     p.setRenderHint(QPainter.Antialiasing)
     p.setBrush(BG)
     p.setPen(Qt.NoPen)
-    p.drawRoundedRect(0, 0, size, size, int(size * 0.1), int(size * 0.1))
+    r = int(ss * CORNER_RATIO)
+    p.drawRoundedRect(0, 0, ss, ss, r, r)
     p.setPen(FG)
-    p.setFont(_char_font(size))
-    p.drawText(pm.rect(), Qt.AlignCenter, CHAR)
+    p.setFont(_char_font(ss))
+    # 校正视觉中心：把绘制区域整体上移 V_OFFSET_RATIO*ss（正值上移）
+    rect = pm.rect()
+    rect.moveTop(rect.top() - int(ss * V_OFFSET_RATIO))
+    p.drawText(rect, Qt.AlignCenter, CHAR)
     p.end()
-    return pm
+    # 平滑缩到目标尺寸（超采样缩小，边缘干净）
+    return pm.scaled(size, size, Qt.IgnoreAspectRatio, Qt.SmoothTransformation)
 
 
 def _png_bytes(img: QImage) -> bytes:
