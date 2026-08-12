@@ -177,22 +177,22 @@ EOF
 echo "==> 文档"
 cp README.md AGENTS.md LICENSE "$ROOT/usr/share/doc/snaptext/"
 
-echo "==> 解析 Depends（按发行版选包名，可用 SNAPTEXT_DEPS 覆盖）"
+echo "==> 解析 Depends（跨发行版 OR 兼容 AOSC + Debian/Ubuntu，可用 SNAPTEXT_DEPS 覆盖）"
+# 同一依赖在不同发行版包名不同：AOSC 无 python3- 前缀（pyside6/opencv/...），
+# Debian/Ubuntu 是 python3-* 拆分名。用 deb 的 OR 关系 `a | b` 让一个 deb
+# 同时被两边满足（每项满足其一即可）。可用 SNAPTEXT_DEPS 完全覆盖。
 if [ -n "${SNAPTEXT_DEPS:-}" ]; then
     DEPS="$SNAPTEXT_DEPS"
 else
-    ID="$(grep -E '^ID=' /etc/os-release 2>/dev/null | cut -d= -f2 | tr -d '"')"
-    case "$ID" in
-        aosc)
-            DEPS="pyside6, opencv, numpy, pillow, pyyaml, six, tqdm, requests, onnxruntime"
-            ;;
-        debian|ubuntu|linuxmint|pop)
-            DEPS="python3-pyside6.qtcore, python3-pyside6.qtgui, python3-pyside6.qtwidgets, python3-opencv, python3-numpy, python3-pillow, python3-yaml, python3-six, python3-tqdm, python3-requests, python3-onnxruntime"
-            ;;
-        *)
-            DEPS="pyside6, opencv, numpy, pillow, pyyaml, six, tqdm, requests, onnxruntime"
-            ;;
-    esac
+    DEPS="pyside6 | python3-pyside6.qtgui, \
+opencv | python3-opencv, \
+numpy | python3-numpy, \
+pillow | python3-pillow, \
+pyyaml | python3-yaml, \
+six | python3-six, \
+tqdm | python3-tqdm, \
+requests | python3-requests, \
+onnxruntime | python3-onnxruntime"
 fi
 echo "==> Depends: $DEPS"
 
