@@ -50,7 +50,15 @@
 - **`hotkey.py`**：`GlobalHotkey(key, mods, on_press)`，ctypes 直调 libX11
   `XGrabKey`，**X11 专属，Wayland 下不工作**。`on_press` 在轮询线程回调，入口需
   用跨线程信号 marshal 到 GUI 线程。**不依赖 Qt**。可重复调用 `release()`。
-- **`snaptext.py`**：入口，接线四个模块。**两个快捷键都=截图+存图**：Alt+X
+- **`hotkey_wayland.py`（2026-08-14）**：`WaylandHotkey(key, mods, on_press)`，
+  **KDE Plasma Wayland 专属**全局热键。经 `org.kde.kglobalaccel` dbus（KWin 接管）。
+  **注册发送用系统 `gdbus` 子进程**（PySide6 QtDBus 对 `a(ai)`/`uint` 封送有
+  PYSIDE-1904 限制、发出去变 `av`/`i`，故不用 QtDBus 发送）；**接收信号用 QtDBus
+  `QDBusConnection.connect`** 订阅 `globalShortcutPressed`（解封方向可靠）。
+  `on_press` 在 GUI 线程被调用。接口与 GlobalHotkey 对齐（`.ok`/`.release()`）。
+  **依赖 Qt**（仅 wayland 会话被懒加载）。非 KDE wayland 下不实例化。
+- **`snaptext.py`**：入口，接线多个模块 + **按会话选热键后端**（`_make_hotkey`）。
+  **两个快捷键都=截图+存图**：Alt+X
   （keysym `x` + Mod1Mask=8）＝截图+存图+复制图片；Alt+C（`c`）＝截图+存图+OCR+
   复制文字。**全程无确认弹窗**，结果走托盘非阻塞气泡（`tray.notify`）。热键回调
   跑在 X 轮询线程，经 `hotkey_pressed` 信号 queued 到 GUI 线程。`OcrWorker` 复用
@@ -73,6 +81,34 @@
 
 数据流：热键(X线程) → 信号(GUI线程) → `start_select` 抓全屏 → Selector 拉框 →
 存 png → 复制图片 / QThread 后台 OCR → 存 txt → 复制文本 → 托盘气泡。
+
+## Wayland 全局热键 / 会话自适应（2026-08-14）
+
+- **wayland 没有统一的全局快捷键协议**（这是平台限制，不是代码能补的）：
+  - KDE Plasma Wayland：KWin 接管 `org.kde.kglobalaccel` dbus，是唯一有成熟
+    第三方全局热键 dbus 接口的桌面 → 用 `hotkey_wayland.py`。
+  - GNOME Wayland：无第三方全局热键 dbus API，只有写 GNOME Shell 扩展才能做到
+    → 降级为 gsettings 自定义快捷键绑命令（见下）。
+  - Sway/wlroots 等：无标准 API → 用户自行绑命令触发。
+  - 通用协议 `zwp_global_shortcuts_v1`：标准里有但 KDE/GNOME 都没实现，不可依赖。
+- **入口 `snaptext.py` 按会话选后端**（`_detect_session` 读 `XDG_SESSION_TYPE`，
+  桌面读 `XDG_CURRENT_DESKTOP`）：x11→`GlobalHotkey`；wayland+KDE→`WaylandHotkey`；
+  wayland+其它→`_NoopHotkey`（占位，`.ok=False`）。`_make_hotkey` 返回对象统一
+  `.ok`/`.release()` 接口，入口无感切换。
+- **`hotkey.py`（libX11）改懒加载**：纯 wayland 无 libX11 的机器 import `snaptext`
+  也不会崩（只有 x11 后端被选中时才 `from hotkey import GlobalHotkey`）。
+- **命令行触发模式（通用兜底，任何桌面可用）**：`snaptext --ocr` / `snaptext --img`
+  触发一次截图。已有常驻实例时经**单实例 unix socket**（`~/.snaptext.sock`，`_IpcServer`
+  后台线程 + queued 信号 marshal 到 GUI 线程）把命令派发给常驻进程；无常驻则本次启动
+  并触发一次。GNOME/其它 wayland 用户可把系统快捷键/启动器绑到这两条命令。
+  **注意：`_IpcServer` 的 emit 回调必须是 `lambda m: w.ipc_triggered.emit(m)`**——
+  直接传 `w.ipc_triggered` 会拿到 Signal 实例，后台线程里 `信号(...)` 不可调用，抛
+  `TypeError: native Qt signal instance ... is not callable`（PySide 信号须经 `.emit()`）。
+- **GNOME 自动注册**：wayland+GNOME 会话启动时 `_register_gnome_shortcuts()` 用
+  `gsettings` 写 `org.gnome.settings-daemon.plugins.media-keys` 的 custom-keybindings
+  （命令 = `python3 <本文件> --ocr/--img`），尽力而为、失败即放弃（可手动在设置里绑）。
+- **Esc 兜底仅 X11**：x11 的 override-redirect 选区窗收不到键盘，才用临时全局 Esc 热键；
+  wayland 的 Selector 是普通窗口、能拿键盘焦点，Esc 原生可用，不抢全局 Esc。
 
 ## 设计哲学
 

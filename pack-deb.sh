@@ -43,7 +43,7 @@ TMPDL="$(mktemp -d)"
 trap 'rm -rf "$TMPDL"' EXIT
 
 echo "==> 语法校验"
-python3 -m py_compile snaptext.py ocr.py ui.py hotkey.py tray.py config.py _config.py _bootstrap.py
+python3 -m py_compile snaptext.py ocr.py ui.py hotkey.py hotkey_wayland.py tray.py config.py _config.py _bootstrap.py
 
 echo "==> 准备打包目录 $STAGE"
 rm -rf "$STAGE"
@@ -55,7 +55,7 @@ mkdir -p "$ROOT/opt/snaptext/lib" \
          "$ROOT/DEBIAN"
 
 echo "==> 拷贝源码/模型"
-for f in snaptext.py ocr.py ui.py hotkey.py tray.py config.py _config.py _bootstrap.py; do
+for f in snaptext.py ocr.py ui.py hotkey.py hotkey_wayland.py tray.py config.py _config.py _bootstrap.py; do
     cp "$f" "$ROOT/opt/snaptext/"
 done
 cp -r models "$ROOT/opt/snaptext/"
@@ -212,8 +212,10 @@ Depends: $DEPS
 Description: 拾字 SnapText — 极简本地截图 + 本地 onnx OCR
  极简本地截图 + 本地 onnx OCR 工具（Linux X11 / KDE Plasma）。
  截图、OCR 全部本地完成，模型直接打包在仓库里，不联网、不上传、无云依赖。
- .
- AIX: 需要 X11（全局热键用 XGrabKey，Wayland 下不工作）。
+ 全局热键按会话自适应：X11 用 XGrabKey；KDE Plasma Wayland 用 KGlobalAccel；
+ GNOME 及其它 Wayland 用命令行触发（snaptext --ocr / --img，可绑定系统快捷键）。
+  .
+ AIX: 需要 X11 或 Wayland 桌面环境（Qt6 + KDE/GLib 组件由系统提供）。
 EOF
 
 echo "==> 构建 $PKG_FILE"
