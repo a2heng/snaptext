@@ -144,6 +144,13 @@ interactive portal 选区，均已废弃，勿回退）。
   `X11BypassWindowManagerHint`/`Qt::Tool`——前者在 Wayland 被忽略、后者可能被部分
   合成器特殊处理）；`showFullScreen` 后 `raise+activateWindow+setFocus` 抢键盘焦点，
   让 Esc 原生可用。
+- **KDE 全屏勿扰（2026-08-15，勿回退到工作区窗口）**：KWin 判定活动窗口为真全屏
+  （xdg-shell fullscreen 状态）时会自动进入勿扰/抑制通知（为游戏/视频设计，应用侧
+  无法拦截，系统设置也没有对应开关）。**结论：盖住任务栏必须真全屏，勿扰只在选区
+  期间闪现、选完自动恢复**，属 KWin 硬约束，别用「工作区几何普通窗」替代（会被夹
+  到工作区、盖不住任务栏）。**副作用修复**：`handleRegion` 里 Image 分支紧跟在
+  `selector_->close()` 后的 `tray_->notify` 会因刚关全屏仍处勿扰态而被吞，须用
+  `QTimer::singleShot(400, ...)` 延迟到全屏状态释放后再弹「已复制图片」。
 - **Wayland 高分屏**：portal 返回合成器输出的物理分辨率全屏图（如 3840×2160），加载后
   **有效 dpr 用「图物理尺寸 / 屏逻辑几何」推导**，勿用 `QScreen::devicePixelRatio()`：
   KWin 分数缩放（如 150%）时 Qt 上报的 dpr 可能是整数（2），而图/逻辑比是 1.5，
@@ -155,8 +162,7 @@ interactive portal 选区，均已废弃，勿回退）。
   （与 X11 `grabScreen` 同级别限制，暂不处理）。
 - **Esc 兜底仅 X11**：x11 的 override-redirect 选区窗收不到键盘，才用临时全局 Esc 热键；
   wayland 的 Selector 是普通窗口、能拿键盘焦点，Esc 原生可用（`keyPressEvent`），不抢全局 Esc。
-- **portal 权限（2026-08-15 晚验证）**：portal Screenshot 是否放行由合成器经
-  `org.freedesktop.impl.portal.PermissionStore` 的 `Lookup(table="screenshot", id=应用id)`
+- **portal 权限（2026-08-15 晚验证）**：portal Screenshot 是否放行由合成器经  `org.freedesktop.impl.portal.PermissionStore` 的 `Lookup(table="screenshot", id=应用id)`
   决定（KDE 数据落在 `~/.local/share/flatpak/db/screenshot`，本机授权条目形如
   `ai.opencode.desktop → screenshot: yes`）。**未授权时 KDE 后端会对 Screenshot 报
   `UnknownObject`、Spectacle 抓不出图、KWin 无 ScreenShot2 节点**——曾误判为「系统级

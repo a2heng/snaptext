@@ -225,10 +225,15 @@ void App::handleRegion(const QPixmap& region, Mode m) {
     if (m == Mode::Image) {
         if (saveImgs) savePng(region, base);
         copyPixmap(region);
-        QString msg = saveImgs
+        const QString msg = saveImgs
             ? QStringLiteral("已复制图片  %1/%2.png").arg(imgDir_, base)
             : QStringLiteral("已复制图片");
-        tray_->notify(QStringLiteral("拾字 SnapText"), msg);
+        // 全屏选区刚关闭：KDE 会把真全屏窗口判为全屏而进入勿扰/抑制通知，要等
+        // 全屏状态释放后（几百 ms）才恢复，故延迟片刻再弹，避免"已复制"被吞。
+        // （见 AGENTS.md「全屏勿扰」节）
+        QTimer::singleShot(400, this, [this, msg]() {
+            tray_->notify(QStringLiteral("拾字 SnapText"), msg);
+        });
         finish();
         return;
     }
