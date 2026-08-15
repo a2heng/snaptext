@@ -15,13 +15,17 @@ jobs:
     container:
       image: ubuntu:latest
     steps:
-      # Install system deps BEFORE checkout: containers have no git/python.
-      # pack-deb.sh needs: python3+pip (download wheels) + unzip (extract) +
-      # dpkg-deb (build .deb, comes with dpkg). Icons are committed, so no Qt needed.
+      # Install C++ build deps BEFORE checkout: containers have no git/qt/cmake.
+      # Qt6 Widgets/Gui/Core/Dbus/Network come from qt6-base-dev; OpenCV from
+      # libopencv-dev; onnxruntime is fetched separately (no distro package).
+      # git is REQUIRED by actions/checkout@v5 (ubuntu:latest image has none);
+      # ca-certificates needed for curl to download the onnxruntime prebuilt.
       - name: Install system dependencies
         run: |
           apt-get update -qq
-          DEBIAN_FRONTEND=noninteractive apt-get install -y -qq python3 python3-pip unzip
+          DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
+            build-essential cmake curl ca-certificates git \
+            qt6-base-dev libopencv-dev libx11-dev
 
       - uses: actions/checkout@v5
 
@@ -38,8 +42,9 @@ jobs:
             echo "stamp=$(date +'%Y-%m-%d-%H%M')" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Compile all Python sources (catch syntax errors before packaging)
-        run: python3 -m py_compile snaptext.py ocr.py ui.py hotkey.py tray.py config.py _config.py _bootstrap.py
+      # onnxruntime 无发行版系统包，拉预编译包到 third_party/（产物不入 git）
+      - name: Fetch onnxruntime
+        run: bash scripts/fetch-onnxruntime.sh
 
       - name: Package deb
         run: |
@@ -47,10 +52,14 @@ jobs:
           ls -lh dist/snaptext-Linux-amd64-*.deb
           dpkg-deb --info dist/snaptext-Linux-amd64-*.deb | sed -n '1,14p'
 
-      - name: Verify icons embedded
+      - name: Verify package contents
         run: |
-          dpkg-deb -c dist/snaptext-Linux-amd64-*.deb | grep -c 'snaptext\.png' >/dev/null && echo "icons OK"
-          dpkg-deb -c dist/snaptext-Linux-amd64-*.deb | grep -c 'snaptext\.ico' >/dev/null && echo "ico OK"
+          D=$(ls dist/snaptext-Linux-amd64-*.deb)
+          dpkg-deb -c "$D" | grep -q 'opt/snaptext/snaptext$' && echo "binary OK"
+          dpkg-deb -c "$D" | grep -q 'models/PP-OCRv6_rec_small.onnx' && echo "models OK"
+          dpkg-deb -c "$D" | grep -q 'lib/libonnxruntime.so.1' && echo "onnxruntime OK"
+          dpkg-deb -c "$D" | grep -q 'applications/io.github.a2heng.snaptext.desktop' && echo "desktop app_id OK"
+          dpkg-deb -c "$D" | grep -qc 'snaptext\.png' >/dev/null && echo "icons OK"
 
       - name: Upload deb artifact
         uses: actions/upload-artifact@v7.0.1

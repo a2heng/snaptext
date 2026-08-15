@@ -3,3 +3,7 @@ __pycache__/
 
 # 打包产物：pack-deb.sh 输出到 dist/
 dist/
+
+# C++ 构建产物 / onnxruntime 预编译（fetch-onnxruntime.sh 拉取）
+build/
+third_party/onnxruntime/
