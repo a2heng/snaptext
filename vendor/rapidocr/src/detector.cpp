@@ -413,6 +413,9 @@ void Detector::ConfigureSessionOptions() {
     // 移动端小模型并行收益低，12 核默认 12 线程/会话 × 3 会话=36 线程，纯属浪费内存与
     // 线程开销。固定 4 线程足够，显著降 RSS/线程数。
     sessionOptions_.SetIntraOpNumThreads(4);
+    // 关 CPU 内存 arena：大图 OCR 峰值会滞留（实测连续大图 RSS 跑到 1.8GB 不回落），
+    // 禁用后每次 Run 完内存交还 OS，避免"截图越大内存越大"累积。
+    sessionOptions_.DisableCpuMemArena();
 }
 
 void Detector::Initialize(const std::string& modelPath) {

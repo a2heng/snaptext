@@ -258,6 +258,12 @@ interactive portal 选区，均已废弃，勿回退）。
   0.6~1.1GB → 固定 960 后 4K 峰值约 342MB、极密 4K 约 819MB，小字/密文略有取舍。
   onnxruntime 默认 12 核开 12 线程/会话 ×3 会话=36 线程，纯属浪费，det/rec/cls 三个
   `ConfigureSessionOptions()` 固定 `SetIntraOpNumThreads(4)`（常驻线程 47→23）。
+- **onnxruntime CPU 内存 arena 必须关（2026-08-16 根因）**：onnxruntime 默认用 CPU
+  内存 arena，**大图 OCR 的峰值内存会被 arena 滞留、不交还 OS**——实测同进程连续 OCR
+  4K 大图 RSS 一路涨到 1.84GB 不回落（"截图越大内存越大"的根因）。修法：det/rec/cls
+  三个 `ConfigureSessionOptions()` 各加 `DisableCpuMemArena()`，每次 Run 完内存交还
+  OS，同进程连续 OCR 大图 RSS 稳定在 ~330MB 不再累积。代价是反复推理时 malloc 开销略增
+  （每次重新申请，而非复用 arena 缓存），对截图这类低频操作可忽略。
 - **宽高比窄条**：rapidocr 对宽高比 > `width_height_ratio` 的窄条用 `apply_vertical_padding`
   加竖直 padding 再走 det（`Global.width_height_ratio=100` 几乎不触发 padding）。
 - **竖排文本是 det 能力边界**：PP-OCR det 按连通域出框，两列竖排文字被 unclip 弥合

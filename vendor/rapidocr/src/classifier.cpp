@@ -38,6 +38,8 @@ void Classifier::ConfigureSessionOptions() {
     sessionOptions_.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_EXTENDED);
     // 同 detector：固定 4 线程，避免 12 核默认 12 线程 × 会话的线程/内存浪费。
     sessionOptions_.SetIntraOpNumThreads(4);
+    // 同 detector：关 CPU 内存 arena，避免大图峰值滞留累积。
+    sessionOptions_.DisableCpuMemArena();
 }
 
 void Classifier::TryUpdateInputSizeFromModel() {
