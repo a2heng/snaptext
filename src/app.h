@@ -66,7 +66,7 @@ private:
     std::unique_ptr<Hotkey> escHk_;       // X11 选区期间临时 Esc
     std::unique_ptr<Selector> selector_;  // 选区 overlay（X11 实时 / Wayland 截图）
     std::unique_ptr<IpcServer> ipc_;
-    QPixmap* fullPix_ = nullptr;          // 当前选区的全屏图
+    std::unique_ptr<QPixmap> fullPix_;        // 当前选区的全屏图
 
     // OCR 引擎（惰性 + 后台预热，跨线程共享）
     std::mutex engineMtx_;

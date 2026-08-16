@@ -123,6 +123,15 @@ Selector::Selector(const QPixmap& pix, QObject* parent)
     impl_ = new Impl(this, pix);
 }
 
+Selector::~Selector() {
+    // Impl 是独立顶层窗口（parent 为 null，无法用 QObject parent 自动回收），
+    // 必须显式释放，否则每次选区泄漏一个全屏窗口 + pix_ + framebuffer。
+    // 用 deleteLater：析构可能在 Impl 自身的信号回调里触发（selected/cancelled），
+    // 同步 delete 会删掉正在处理事件的窗口导致段错误；延迟到事件循环再删安全。
+    if (impl_) impl_->deleteLater();
+    impl_ = nullptr;
+}
+
 void Selector::show() {
     impl_->showFullScreen();
     // Wayland 键盘焦点由合成器分配：主动抢焦点让 Esc 原生可用（X11 由入口侧

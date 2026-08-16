@@ -17,6 +17,7 @@ class Selector : public QObject {
     Q_OBJECT
 public:
     explicit Selector(const QPixmap& pix, QObject* parent = nullptr);
+    ~Selector() override;
 
     void show();
     void close();

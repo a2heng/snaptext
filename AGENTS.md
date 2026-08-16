@@ -46,7 +46,9 @@
 - **`ui.cpp`**：`grabScreen()`（X11 抓全屏含系统面板）、`Selector`（全屏拉框 overlay，
   X11 用 `X11BypassWindowManagerHint` 盖住 KDE 底栏；Wayland 用普通置顶全屏窗抢键盘
   焦点让 Esc 原生可用；`selected(QRect)`/`cancelled()` 信号，最小选区、小选区也 emit
-  cancelled）。**无结果弹窗**。
+  cancelled）。**无结果弹窗**。`Selector::Impl` 是 parent=null 的独立顶层窗口，
+  Selector 析构必须 `impl_->deleteLater()` 显式释放，否则每次选区泄漏全屏窗口 +
+  pix_ + framebuffer（2026-08-16 实测每次选区 RSS +~200MB 无平台，已修）。
 - **`hotkey.cpp`**：`GlobalHotkeyX11`（X11 专属 `XGrabKey`，轮询线程 + lock 变体 +
   防抖，`onPress` 在轮询线程回调，入口 queued 到 GUI 线程）。**不依赖 Qt**。
 - **`globalshortcut.cpp`**：Wayland 全局热键（`org.freedesktop.portal.GlobalShortcuts`，
@@ -55,6 +57,8 @@
 - **`app.cpp`**：流程编排 + 按会话选热键后端。两个快捷键都=截图+存图：Alt+X=截图+
   存图+复制图片；Alt+C=截图+存图+OCR+复制文字。全程无确认弹窗，结果走托盘气泡。
   忙时热键入队（FIFO，`pending_`），当前任务收尾统一走 `finish()` 自动执行下一个。
+  全屏图 `fullPix_` 必须用 `unique_ptr` 且选区结束（selected/cancelled）后显式
+  `reset()`，否则每次截图泄漏一个全屏 QPixmap（2026-08-16 实测导致 RSS 随截图数增长）。
 - **`portal.cpp`**：Wayland 截屏（`org.freedesktop.portal.Screenshot` 非交互），
   见「Wayland 通用架构」节。
 - **`tray.cpp`**：`TrayIcon`（加载静态资源 `icons/snaptext.svg`），右键退出、左键

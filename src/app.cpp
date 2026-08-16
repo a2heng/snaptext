@@ -178,14 +178,14 @@ void App::startSelect(Mode m) {
             const QScreen* s = QGuiApplication::primaryScreen();
             const qreal dpr = s ? double(pix.width()) / double(s->geometry().width()) : 1.0;
             pix.setDevicePixelRatio(dpr);
-            fullPix_ = new QPixmap(pix);
+            fullPix_ = std::make_unique<QPixmap>(pix);
             showSelector(m);
         });
         return;
     }
 
     // X11：抓全屏 + 自绘拉框 overlay
-    fullPix_ = new QPixmap(grabScreen());
+    fullPix_ = std::make_unique<QPixmap>(grabScreen());
     if (fullPix_->isNull()) {
         finish();
         return;
@@ -210,10 +210,12 @@ void App::showSelector(Mode m) {
                                          qRound(r.width() * dpr), qRound(r.height() * dpr));
                          QPixmap region = fullPix_->copy(src);
                          selector_.reset();
+                         fullPix_.reset();  // 释放全屏图，避免每次截图泄漏一个 QPixmap
                          handleRegion(region, m);
                      });
     QObject::connect(selector_.get(), &Selector::cancelled, this, [this]() {
         selector_.reset();
+        fullPix_.reset();  // 释放全屏图
         finish();
     });
     selector_->show();
