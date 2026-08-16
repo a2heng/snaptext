@@ -36,6 +36,8 @@ Classifier::Classifier()
 void Classifier::ConfigureSessionOptions() {
     sessionOptions_ = Ort::SessionOptions();
     sessionOptions_.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_EXTENDED);
+    // 同 detector：固定 4 线程，避免 12 核默认 12 线程 × 会话的线程/内存浪费。
+    sessionOptions_.SetIntraOpNumThreads(4);
 }
 
 void Classifier::TryUpdateInputSizeFromModel() {

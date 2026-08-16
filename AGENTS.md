@@ -57,7 +57,7 @@
   忙时热键入队（FIFO，`pending_`），当前任务收尾统一走 `finish()` 自动执行下一个。
 - **`portal.cpp`**：Wayland 截屏（`org.freedesktop.portal.Screenshot` 非交互），
   见「Wayland 通用架构」节。
-- **`tray.cpp`**：`TrayIcon`（加载静态资源 `icons/snaptext-64.png`），右键退出、左键
+- **`tray.cpp`**：`TrayIcon`（加载静态资源 `icons/snaptext.svg`），右键退出、左键
   提示热键、`notify(title, msg)` 非阻塞气泡。热键展示文案由入口传入。
 - **`config.cpp`**：可选 `config.conf`（全注释模板、不改=现状），仅标准库，白名单
   校验、非法项静默回退默认并 stderr 警示。见「配置」节。
@@ -252,10 +252,12 @@ interactive portal 选区，均已废弃，勿回退）。
   （基准取两框中较矮者）"聚类成行，同行内沿文本方向排序空格连接。**判据要点**：紧挨
   的两行文字法线区间可能搭界 2px，但重叠比例极低（行高 27/44 时仅 7%），不会误连；
   而同一行框重叠比例 90%+。旋转/倾斜文本投影到同一法线上仍同属一行，天然稳健。
-- **det 长边封顶（性能）**：det 在 `limit_type='max'` 时按 `max_wh` 自动选
-  960/1500/2000 封顶，`Det.limit_side_len=960` 语义延续（长边封顶、32 对齐）。
-  让扁图/4K 都不全尺寸推理（旧版 `limit_type='min'` 会把 694×50 扁图放大成
-  10200×736，3-4 秒）。实测 4K 全屏 ~1s、扁图 ~0.5s。
+- **det 长边封顶（性能 + 内存，2026-08-16 改固定 960）**：det 在 `limit_type='max'` 时
+  原按 `max_wh` 自动选 960/1500/2000 封顶，让扁图/4K 都不全尺寸推理。**2026-08-16 起
+  固定 960px**（内存优先）：4K 全屏按 2000px 推理中间特征图占内存大，实测 OCR 峰值
+  0.6~1.1GB → 固定 960 后 4K 峰值约 342MB、极密 4K 约 819MB，小字/密文略有取舍。
+  onnxruntime 默认 12 核开 12 线程/会话 ×3 会话=36 线程，纯属浪费，det/rec/cls 三个
+  `ConfigureSessionOptions()` 固定 `SetIntraOpNumThreads(4)`（常驻线程 47→23）。
 - **宽高比窄条**：rapidocr 对宽高比 > `width_height_ratio` 的窄条用 `apply_vertical_padding`
   加竖直 padding 再走 det（`Global.width_height_ratio=100` 几乎不触发 padding）。
 - **竖排文本是 det 能力边界**：PP-OCR det 按连通域出框，两列竖排文字被 unclip 弥合
@@ -285,7 +287,7 @@ interactive portal 选区，均已废弃，勿回退）。
   （Depends 声明），deb 约 35MB。
 - 布局：`/opt/snaptext/{snaptext, snaptext-ocr, models/, icons/, lib/}` +
   `/usr/bin/snaptext`（启动脚本，设 `LD_LIBRARY_PATH=/opt/snaptext/lib` +
-  `SNAPTEXT_MODELS_DIR`）+ desktop + hicolor 图标 + 文档。
+  `SNAPTEXT_MODELS_DIR`）+ desktop + hicolor 图标（SVG 进 scalable）+ 文档。
 - **onnxruntime 内置**：跨发行版无统一系统包名（Ubuntu=libonnxruntime1.x，版本各异的
   SONAME），随包自含到 `lib/`（`cp -P` 保留符号链接，勿展开成两份实文件），仅依赖
   系统 libc/libstdc++。
@@ -296,11 +298,17 @@ interactive portal 选区，均已废弃，勿回退）。
   Qt6 在 Debian 拆包且新版带 t64 后缀（`libqt6core6 | libqt6core6t64`）、OpenCV
   版本号随发行版（`libopencv-core410 | libopencv-core4.10 | libopencv-core4.8`）。
   用 deb 的 OR 关系 `a | b`（每项满足其一即可）。`SNAPTEXT_DEPS` 仍可完全覆盖。
-- **图标静态化（2026-08-12）**：`icons/`（png 多尺寸 + ico，蓝底圆角 + 宋体 Black
+  **托盘用 SVG 图标**（`QIcon("...svg")`），需 Qt 的 SVG 插件，故另加 `libqt6svg6`。
+- **图标静态化（2026-08-12；2026-08-16 主图标改 SVG）**：`icons/`（**主图标
+  `snaptext.svg` 矢量单文件** + png 多尺寸回退 + ico，蓝底圆角 + 宋体 Black
   "拾"字）随仓库提交，打包时直接拷贝，**CI 不生成图标**（少一个故障点）。
-  **托盘也加载静态资源**（tray.cpp 读 `icons/snaptext-64.png`，不运行时绘制）。
-  需重画时跑 `QT_QPA_PLATFORM=offscreen python3 make-icons.py` 并提交新 icons/。
-  样式参数（圆角/字号/垂直偏移/超采样）见 make-icons.py 顶部常量。
+  **托盘也加载静态资源**（tray.cpp 读 `icons/snaptext.svg`，不运行时绘制；SVG
+  按目标尺寸矢量渲染、只占当前尺寸内存，比多尺寸 PNG 更省内存，故托盘/桌面用
+  SVG 为主）。SVG 的"拾"字用 QPainterPath 提取轮廓**内嵌为 path 路径**，渲染时
+  不依赖系统字体（字体只生成时用一次）。需重画时跑
+  `QT_QPA_PLATFORM=offscreen python3 make-icons.py` 并提交新 icons/。
+  样式参数（圆角/字号/垂直偏移/超采样）见 make-icons.py 顶部常量；字体路径可
+  `SNAPTEXT_ICON_FONT` 覆盖。
 - **tag 命名准则（2026-08-13）**：tag 触发 CI 时版本取 `GITHUB_REF_NAME`（去 `v`），
   本地跑回退当前时间。**tag 必须手动打成 `vYYYY.MM.DD.HHMM`（10 位、含分钟）**，
   例：`v2026.08.15.2130` = 2026-08-15 **21:30（晚上 9 点 30 分）**。HHMM 是 24 小时制，

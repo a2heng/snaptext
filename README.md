@@ -103,7 +103,8 @@ src/main.cpp            入口：单实例锁 + --ocr/--img 派发 + GNOME gsett
   X11 走系统包（Depends 声明）**；onnxruntime 无跨发行版统一系统包，随包内置到
   `/opt/snaptext/lib`（启动脚本设 `LD_LIBRARY_PATH`）。
 - **模型**：PP-OCRv6 det/rec + LCNet 方向分类器（`models/` 随仓库打包，官方原名，
-  真正离线）。**图标**：托盘同款静态图标（`icons/` 随仓库提交，CI 不生成）。
+  真正离线）。**图标**：托盘同款静态矢量图标（`icons/snaptext.svg` 随仓库提交，
+  CI 不生成，按需缩放省内存）。
 - **Wayland 热键依赖 desktop 文件**：deb 安装
   `io.github.a2heng.snaptext.desktop`（文件名 = GlobalShortcuts 的 app_id，勿改名），
   否则 portal `Registry.Register` 报 "App info not found"、热键绑定失败。

@@ -304,14 +304,11 @@ float ResolveDetLimitSideLen(const cv::Mat& src, const OcrRunOptions& options) {
         return options.limitSideLen;
     }
 
-    const int maxWh = std::max(src.rows, src.cols);
-    if (maxWh < 960) {
-        return 960.0f;
-    }
-    if (maxWh < 1500) {
-        return 1500.0f;
-    }
-    return 2000.0f;
+    // 内存优先：固定 960px 长边封顶（原随图自适应 960/1500/2000）。
+    // 4K 全屏按 2000px 推理中间特征图占内存大（实测峰值 0.6~1.1GB）；
+    // 统一 960 后峰值显著下降，小字/密文略有取舍（见 AGENTS.md）。
+    (void)src;
+    return 960.0f;
 }
 
 std::vector<TextBox> FindResultBoxes(
@@ -413,6 +410,9 @@ Detector::Detector()
 void Detector::ConfigureSessionOptions() {
     sessionOptions_ = Ort::SessionOptions();
     sessionOptions_.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_EXTENDED);
+    // 移动端小模型并行收益低，12 核默认 12 线程/会话 × 3 会话=36 线程，纯属浪费内存与
+    // 线程开销。固定 4 线程足够，显著降 RSS/线程数。
+    sessionOptions_.SetIntraOpNumThreads(4);
 }
 
 void Detector::Initialize(const std::string& modelPath) {

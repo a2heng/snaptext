@@ -61,6 +61,9 @@ for s in 16 24 32 48 64 128 256; do
   mkdir -p "$ROOT/usr/share/icons/hicolor/${s}x${s}/apps"
   cp "icons/snaptext-$s.png" "$ROOT/usr/share/icons/hicolor/${s}x${s}/apps/snaptext.png"
 done
+# SVG 主图标进 hicolor scalable（矢量，任意尺寸清晰）
+mkdir -p "$ROOT/usr/share/icons/hicolor/scalable/apps"
+cp "icons/snaptext.svg" "$ROOT/usr/share/icons/hicolor/scalable/apps/snaptext.svg"
 
 echo "==> 内置 onnxruntime（跨发行版无统一系统包，随包自含保证 SONAME 匹配）"
 # -P 保留符号链接（libonnxruntime.so.1 -> .1.29.0），否则 cp 会跟随展开成两份实文件
@@ -105,6 +108,7 @@ if [ -n "${SNAPTEXT_DEPS:-}" ]; then
     DEPS="$SNAPTEXT_DEPS"
 else
     DEPS="libqt6widgets6 | libqt6widgets6a | qt6-base, \
+libqt6svg6, \
 libqt6gui6 | libqt6gui6a, \
 libqt6core6 | libqt6core6t64, \
 libqt6dbus6, \

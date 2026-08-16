@@ -95,7 +95,7 @@ void App::init(const QString& modelsDir) {
     const QString hint =
         QStringLiteral("Alt+X 截图并复制图片\nAlt+C 截图并 OCR");
     tray_ = std::make_unique<TrayIcon>(
-        QDir(modelsDir).filePath(QStringLiteral("../icons/snaptext-64.png")), hint, this);
+        QDir(modelsDir).filePath(QStringLiteral("../icons/snaptext.svg")), hint, this);
     QObject::connect(tray_.get(), &TrayIcon::quitRequested, this, [this]() {
         QCoreApplication::quit();
     });
